@@ -97,14 +97,14 @@ fn print_report(report: &Report) {
     let mut ignored: Vec<&String> = report.get_ignored().iter().collect();
     ignored.sort();
     for key in ignored {
-        println!("    +- {}", key);
+        println!("    +- {key}");
     }
     println!("+---- Skipped {}", report.skipped_count());
     let mut skipped: Vec<&String> = report.get_skipped().keys().collect();
     skipped.sort();
     for key in skipped {
         let reason = &report.get_skipped()[key];
-        println!("    +- {} ({:?})", key, reason);
+        println!("    +- {key} ({reason:?})");
     }
 }
 
@@ -134,18 +134,18 @@ fn process_audit(args: &Args) {
         println!("+-----------------------------");
         for (key, report) in auditor.get_parsed() {
             if report.skipped_count() > 0 || report.ignored_count() > 0 {
-                println!("| {} ", key);
+                println!("| {key} ");
                 print_report(report);
             }
         }
         println!("+-----------------------------");
         println!("Skipped {}", auditor.skipped_count());
         for key in auditor.get_skipped().keys() {
-            println!("| {} ", key);
+            println!("| {key} ");
         }
         println!("Ignored {}", auditor.ignored_count());
         for key in auditor.get_ignored() {
-            println!("| {} ", key);
+            println!("| {key} ");
         }
     } else {
         unreachable!()
@@ -161,7 +161,7 @@ fn print_keywords(keywords: &[Keyword], indent: &str) {
         let name = keyword.name.as_ref().unwrap();
         let uuid = keyword.uuid().as_ref().unwrap();
         let parent = keyword.parent().clone().unwrap_or_default();
-        println!("| {:<26} | {:<26} | {}{}", uuid, parent, indent, name);
+        println!("| {uuid:<26} | {parent:<26} | {indent}{name}");
         if keyword.children.is_some() {
             let new_indent = if indent.is_empty() {
                 String::from("+- ") + indent
@@ -179,7 +179,7 @@ fn process_dump(args: &Args) {
 
         {
             if let Ok(version) = library.library_version() {
-                println!("Version {}", version);
+                println!("Version {version}");
             } else {
                 println!("Version not found.");
                 return;
@@ -270,8 +270,7 @@ fn dump_volumes(library: &mut Library) {
                 let disk_uuid = volume.disk_uuid.clone().unwrap_or_default();
                 let model_id = volume.model_id();
                 println!(
-                    "| {:<22} | {:<22} | {:<36} | {:>4} |",
-                    name, uuid, disk_uuid, model_id,
+                    "| {name:<22} | {uuid:<22} | {disk_uuid:<36} | {model_id:>4} |",
                 )
             }
             _ => {
@@ -318,13 +317,13 @@ fn dump_folders(library: &mut Library) {
                     uuid,
                     parent_uuid,
                     implicit_album_uuid,
-                    format!("{:?}", folder_type),
+                    format!("{folder_type:?}"),
                     folder_type_num,
                     folder.model_id(),
                     path
                 )
             }
-            _ => println!("folder {} not found", folder_uuid),
+            _ => println!("folder {folder_uuid} not found"),
         }
     }
 }
@@ -360,18 +359,12 @@ fn dump_albums(library: &mut Library) {
                     .and_then(AlbumSubclass::to_i32)
                     .unwrap_or(0);
                 println!(
-                    "| {:<37} | {:<26} | {:<26} | {:>4} | {:<8}{:>2} | {:>8} | {}",
-                    uuid,
-                    parent,
-                    query_folder_uuid,
+                    "| {uuid:<37} | {parent:<26} | {query_folder_uuid:<26} | {:>4} | {album_class:<8?}{album_class_num:>2} | {:>8} | {name}",
                     album.album_type.unwrap_or(0),
-                    format!("{:?}", album_class),
-                    album_class_num,
                     album.model_id(),
-                    name
                 )
             }
-            _ => println!("album {} not found", album_uuid),
+            _ => println!("album {album_uuid} not found"),
         }
     }
 }
@@ -413,11 +406,10 @@ fn dump_masters(model_info: &ModelInfo, library: &mut Library) {
                 let subtype = master.subtype.clone().unwrap_or_default();
                 let orig_uuid = master.original_version_uuid.clone().unwrap_or_default();
                 println!(
-                    "| {:<22} | {:<22} | {:<22} | {:<4} | {:<5} | {} | {}",
-                    uuid, parent, alternate, mtype, subtype, orig_uuid, image_path
+                    "| {uuid:<22} | {parent:<22} | {alternate:<22} | {mtype:<4} | {subtype:<5} | {orig_uuid} | {image_path}",
                 )
             }
-            _ => println!("master {} not found", master_uuid),
+            _ => println!("master {master_uuid} not found"),
         }
     }
 }
@@ -453,17 +445,11 @@ fn dump_versions(model_info: &ModelInfo, library: &mut Library) {
                     .unwrap_or_default();
 
                 println!(
-                    "| {:<22} | {:<22} | {:<22} | {:>5} | {:>5} | {:>3} | {}",
-                    uuid,
-                    parent,
-                    project_uuid,
+                    "| {uuid:<22} | {parent:<22} | {project_uuid:<22} | {:>5} | {rawmaster:>5} | {num:>3} | {name}",
                     version.is_original.unwrap_or(false),
-                    rawmaster,
-                    num,
-                    name
                 )
             }
-            _ => println!("version {} not found", version_uuid),
+            _ => println!("version {version_uuid} not found"),
         }
     }
 }

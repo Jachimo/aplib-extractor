@@ -63,7 +63,7 @@ where
             // XXX deal with proper errors here.
             // Version 3.4.5 has version 7.
             if version != 6 && version != 7 {
-                println!("Wrong keyword version {} !", version);
+                println!("Wrong keyword version {version} !");
             }
             Keyword::from_array(get_array_value(dict, "keywords"))
         }

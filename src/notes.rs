@@ -58,7 +58,7 @@ impl NotesProperties {
                     _ => {
                         if let Some(auditor) = &mut auditor {
                             auditor.skip(
-                                format!("notes[{}]", counter).as_ref(),
+                                format!("notes[{counter}]").as_ref(),
                                 SkipReason::InvalidType,
                             );
                         }

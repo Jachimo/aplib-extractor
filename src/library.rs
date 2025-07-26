@@ -320,7 +320,7 @@ impl Library {
                         .unwrap()
                         .skip(&file.to_string_lossy(), SkipReason::ParseFailed);
                 }
-                println!("Failed to decode object from {:?}", file);
+                println!("Failed to decode object from {file:?}");
             }
             if let Some(pg) = pg.as_mut() {
                 if !pg(1) {
@@ -469,7 +469,7 @@ impl Library {
                         .unwrap()
                         .skip(&file.to_string_lossy(), SkipReason::ParseFailed);
                 }
-                println!("Error decoding object from {:?}", file);
+                println!("Error decoding object from {file:?}");
             }
             if let Some(pg) = pg.as_mut() {
                 if !pg(1) {
@@ -511,7 +511,7 @@ impl Library {
                         .unwrap()
                         .skip(&file.to_string_lossy(), SkipReason::ParseFailed);
                 }
-                println!("Error decoding object from {:?}", file);
+                println!("Error decoding object from {file:?}");
             }
             if let Some(pg) = pg.as_mut() {
                 if !pg(1) {

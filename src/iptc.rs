@@ -114,13 +114,13 @@ impl IptcProperties {
                     values.insert(key.to_owned(), IptcValue::Str(s.to_owned()));
                     if let Some(ref mut r) = *auditor {
                         if !IPTC_TO_XMP.contains_key(&key.as_str()) {
-                            r.skip(&format!("Iptc.{}", key), SkipReason::UnknownProp);
+                            r.skip(&format!("Iptc.{key}"), SkipReason::UnknownProp);
                         }
                     }
                 }
                 _ => {
                     if let Some(ref mut r) = *auditor {
-                        r.skip(&format!("Iptc.{}", key), SkipReason::InvalidType);
+                        r.skip(&format!("Iptc.{key}"), SkipReason::InvalidType);
                     }
                 }
             };

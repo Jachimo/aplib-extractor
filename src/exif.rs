@@ -149,11 +149,11 @@ impl ExifProperties {
                 values.insert(key.to_owned(), ev);
                 if let Some(ref mut r) = *auditor {
                     if !EXIF_TO_XMP.contains_key(&key.as_str()) {
-                        r.skip(&format!("Exif.{}", key), SkipReason::UnknownProp);
+                        r.skip(&format!("Exif.{key}"), SkipReason::UnknownProp);
                     }
                 }
             } else if let Some(ref mut r) = *auditor {
-                r.skip(&format!("Exif.{}", key), SkipReason::InvalidType);
+                r.skip(&format!("Exif.{key}"), SkipReason::InvalidType);
             }
         }
         Some(ExifProperties { bag: values })
@@ -162,7 +162,7 @@ impl ExifProperties {
     pub fn value_to_string(value: &ExifValue) -> Option<String> {
         match *value {
             ExifValue::Str(ref str) => Some(str.clone()),
-            ExifValue::Int(i) => Some(format!("{}", i)),
+            ExifValue::Int(i) => Some(format!("{i}")),
             _ => None,
         }
     }
@@ -175,10 +175,10 @@ impl ExifProperties {
                 NS_EXIF,
                 "ISOSpeedRatings",
                 0,
-                &format!("{}", i),
+                &format!("{i}"),
                 exempi2::PropFlags::NONE,
             ) {
-                println!("Error converting ISO {:?}", err);
+                println!("Error converting ISO {err:?}");
             }
         }
     }
@@ -205,7 +205,7 @@ impl ExifProperties {
         if let Err(err) =
             xmp.set_property(NS_EXIF_AUX, "LensInfo", &value, exempi2::PropFlags::NONE)
         {
-            println!("Error converting LensInfo {:?}", err);
+            println!("Error converting LensInfo {err:?}");
         }
     }
 
