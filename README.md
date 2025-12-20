@@ -68,15 +68,24 @@ Commands and Options:
 
 - `export`  
   Export images as hardlinks.
-  - `--albums`      Export images into directories named after albums.
   - `--masters`     Export original master files (default is edited versions).
   - `--versions`    Export all edited versions as separate files.
+  - `--albums`      Export images into directories named after albums.
   - `--out-dir DIR` Output directory (default: current directory).
   - `--dryrun`      Print shell commands for actions instead of performing them.
+
+If neither `--albums` nor `--folders` is passed, and `--masters` is passed,
+all master images are exported into a directory named `Masters` in the output directory.
+
+If neither `--albums` nor `--folders` is passed, and `--versions` is passed,
+all rendered, edited images are exported into a directory named `Versions` in the output directory.
 
 Notes:
 - Source library and export destination must be on the same filesystem for `export`.
 - `<LIBRARY_PATH>` is the path to the Aperture library bundle.
+- There is no guarantee that a rendered version exists for each Master image.
+  Photos may lack versions because they were never rendered into a Preview, or if
+  the library was cleaned.
 
 Other
 -----

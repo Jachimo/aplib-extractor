@@ -509,6 +509,10 @@ fn dump_versions(model_info: &ModelInfo, library: &mut Library) {
 }
 
 fn process_export(args: &ExportArgs) {
+    // Canonicalize the library path to an absolute path
+    let library_abs = fs::canonicalize(&args.path)
+        .expect("Failed to resolve absolute path to library");
+
     let mut library = Library::new(&args.path);
     let out_dir = args.out_dir.as_deref().unwrap_or(".");
     if args.dryrun {
@@ -549,10 +553,14 @@ fn process_export(args: &ExportArgs) {
                             if args.masters {
                                 if let Some(master_uuid) = &version.master_uuid {
                                     if let Some(StoreWrapper::Master(master)) = library.get(master_uuid) {
-                                        let src = Path::new(&args.path).join(master.image_path.as_ref().unwrap());
+                                        let src = library_abs.join(master.image_path.as_ref().unwrap());
                                         let dest = Path::new(&album_dir).join(
                                             Path::new(master.image_path.as_ref().unwrap()).file_name().unwrap()
                                         );
+                                        if !src.exists() {
+                                            eprintln!("Source file does not exist, skipping: '{}'", src.display());
+                                            continue;
+                                        }
                                         if args.dryrun {
                                             println!("ln '{}' '{}'", src.display(), dest.display());
                                         } else if !dest.exists() {
@@ -561,8 +569,12 @@ fn process_export(args: &ExportArgs) {
                                     }
                                 }
                             } else if let Some(file_name) = &version.file_name {
-                                let src = get_version_image_path(&args.path, version_uuid, file_name);
+                                let src = get_version_image_path(library_abs.to_str().unwrap(), version_uuid, file_name);
                                 let dest = Path::new(&album_dir).join(file_name);
+                                if !src.exists() {
+                                    eprintln!("Source file does not exist, skipping: '{}'", src.display());
+                                    continue;
+                                }
                                 if args.dryrun {
                                     println!("ln '{}' '{}'", src.display(), dest.display());
                                 } else if !dest.exists() {
@@ -602,8 +614,12 @@ fn process_export(args: &ExportArgs) {
                 continue;
             }
             if let Some(StoreWrapper::Master(master)) = library.get(master_uuid) {
-                let src = Path::new(&args.path).join(master.image_path.as_ref().unwrap());
+                let src = library_abs.join(master.image_path.as_ref().unwrap());
                 let dest = masters_dir.join(Path::new(master.image_path.as_ref().unwrap()).file_name().unwrap());
+                if !src.exists() {
+                    eprintln!("Source file does not exist, skipping: '{}'", src.display());
+                    continue;
+                }
                 if args.dryrun {
                     println!("ln '{}' '{}'", src.display(), dest.display());
                 } else if !dest.exists() {
