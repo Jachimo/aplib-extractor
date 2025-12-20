@@ -271,9 +271,7 @@ fn dump_volumes(library: &mut Library) {
                 let uuid = volume.uuid().as_ref().unwrap();
                 let disk_uuid = volume.disk_uuid.clone().unwrap_or_default();
                 let model_id = volume.model_id();
-                println!(
-                    "| {name:<22} | {uuid:<22} | {disk_uuid:<36} | {model_id:>4} |",
-                )
+                println!("| {name:<22} | {uuid:<22} | {disk_uuid:<36} | {model_id:>4} |",)
             }
             _ => {
                 println!("Folder not found.");
