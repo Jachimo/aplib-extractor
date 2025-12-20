@@ -72,6 +72,7 @@ Commands and Options:
   - `--masters`     Export original master files (default is edited versions).
   - `--versions`    Export all edited versions as separate files.
   - `--out-dir DIR` Output directory (default: current directory).
+  - `--dryrun`      Print shell commands for actions instead of performing them.
 
 Notes:
 - Source library and export destination must be on the same filesystem for `export`.

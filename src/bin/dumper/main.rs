@@ -70,6 +70,8 @@ struct ExportArgs {
     versions: bool,
     #[arg(long)]
     out_dir: Option<String>,
+    #[arg(long)]
+    dryrun: bool,
     path: String,
 }
 
@@ -509,7 +511,11 @@ fn dump_versions(model_info: &ModelInfo, library: &mut Library) {
 fn process_export(args: &ExportArgs) {
     let mut library = Library::new(&args.path);
     let out_dir = args.out_dir.as_deref().unwrap_or(".");
-    fs::create_dir_all(out_dir).expect("Failed to create output directory");
+    if args.dryrun {
+        println!("mkdir -p '{}'", out_dir);
+    } else {
+        fs::create_dir_all(out_dir).expect("Failed to create output directory");
+    }
 
     if args.albums {
         library.load_albums(PROGRESS_NONE);
@@ -522,21 +528,34 @@ fn process_export(args: &ExportArgs) {
             if let Some(StoreWrapper::Album(album)) = library.get(album_uuid) {
                 let album_name = sanitize_filename::sanitize(album.name.clone().unwrap_or_else(|| "Unnamed_Album".to_string()));
                 let album_dir = Path::new(out_dir).join(&album_name);
-                fs::create_dir_all(&album_dir).expect("Failed to create album directory");
+                if args.dryrun {
+                    println!("mkdir -p '{}'", album_dir.display());
+                } else {
+                    fs::create_dir_all(&album_dir).expect("Failed to create album directory");
+                }
 
-                // Get all version UUIDs in this album
                 if let Some(version_uuids) = &album.content {
+                    // Only show progress bar if not dryrun
+                    let mut pb = if !args.dryrun {
+                        Some(ProgressBar::new(version_uuids.len() as u64))
+                    } else {
+                        None
+                    };
+                    if let Some(ref mut pb) = pb {
+                        pb.message(&format!("Exporting album: {} ", album_name));
+                    }
                     for version_uuid in version_uuids {
                         if let Some(StoreWrapper::Version(version)) = library.get(version_uuid) {
                             if args.masters {
-                                // Export master
                                 if let Some(master_uuid) = &version.master_uuid {
                                     if let Some(StoreWrapper::Master(master)) = library.get(master_uuid) {
                                         let src = Path::new(&args.path).join(master.image_path.as_ref().unwrap());
                                         let dest = Path::new(&album_dir).join(
                                             Path::new(master.image_path.as_ref().unwrap()).file_name().unwrap()
                                         );
-                                        if !dest.exists() {
+                                        if args.dryrun {
+                                            println!("ln '{}' '{}'", src.display(), dest.display());
+                                        } else if !dest.exists() {
                                             hard_link(&src, &dest).unwrap_or_else(|e| eprintln!("Failed to link {:?} -> {:?}: {}", src, dest, e));
                                         }
                                     }
@@ -544,11 +563,19 @@ fn process_export(args: &ExportArgs) {
                             } else if let Some(file_name) = &version.file_name {
                                 let src = get_version_image_path(&args.path, version_uuid, file_name);
                                 let dest = Path::new(&album_dir).join(file_name);
-                                if !dest.exists() {
+                                if args.dryrun {
+                                    println!("ln '{}' '{}'", src.display(), dest.display());
+                                } else if !dest.exists() {
                                     hard_link(&src, &dest).unwrap_or_else(|e| eprintln!("Failed to link {:?} -> {:?}: {}", src, dest, e));
                                 }
                             }
                         }
+                        if let Some(ref mut pb) = pb {
+                            pb.inc();
+                        }
+                    }
+                    if let Some(ref mut pb) = pb {
+                        pb.finish_print(&format!("Done album: {}", album_name));
                     }
                 }
             }
@@ -557,7 +584,19 @@ fn process_export(args: &ExportArgs) {
         library.load_masters(PROGRESS_NONE);
         let masters = library.masters();
         let masters_dir = Path::new(out_dir).join("Masters");
-        fs::create_dir_all(&masters_dir).expect("Failed to create Masters directory");
+        if args.dryrun {
+            println!("mkdir -p '{}'", masters_dir.display());
+        } else {
+            fs::create_dir_all(&masters_dir).expect("Failed to create Masters directory");
+        }
+        let mut pb = if !args.dryrun {
+            Some(ProgressBar::new(masters.len() as u64))
+        } else {
+            None
+        };
+        if let Some(ref mut pb) = pb {
+            pb.message("Exporting masters ");
+        }
         for master_uuid in masters {
             if master_uuid.is_empty() {
                 continue;
@@ -565,16 +604,36 @@ fn process_export(args: &ExportArgs) {
             if let Some(StoreWrapper::Master(master)) = library.get(master_uuid) {
                 let src = Path::new(&args.path).join(master.image_path.as_ref().unwrap());
                 let dest = masters_dir.join(Path::new(master.image_path.as_ref().unwrap()).file_name().unwrap());
-                if !dest.exists() {
+                if args.dryrun {
+                    println!("ln '{}' '{}'", src.display(), dest.display());
+                } else if !dest.exists() {
                     hard_link(&src, &dest).unwrap_or_else(|e| eprintln!("Failed to link {:?} -> {:?}: {}", src, dest, e));
                 }
             }
+            if let Some(ref mut pb) = pb {
+                pb.inc();
+            }
+        }
+        if let Some(ref mut pb) = pb {
+            pb.finish_print("Done exporting masters");
         }
     } else if args.versions {
         library.load_versions(PROGRESS_NONE);
         let versions = library.versions();
         let versions_dir = Path::new(out_dir).join("Versions");
-        fs::create_dir_all(&versions_dir).expect("Failed to create Versions directory");
+        if args.dryrun {
+            println!("mkdir -p '{}'", versions_dir.display());
+        } else {
+            fs::create_dir_all(&versions_dir).expect("Failed to create Versions directory");
+        }
+        let mut pb = if !args.dryrun {
+            Some(ProgressBar::new(versions.len() as u64))
+        } else {
+            None
+        };
+        if let Some(ref mut pb) = pb {
+            pb.message("Exporting versions ");
+        }
         for version_uuid in versions {
             if version_uuid.is_empty() {
                 continue;
@@ -587,13 +646,21 @@ fn process_export(args: &ExportArgs) {
                     );
                     let ext = Path::new(file_name).extension().and_then(|e| e.to_str()).unwrap_or("jpg");
                     let dest = versions_dir.join(format!("{}_{}.{}", version_name, &version_uuid[..8], ext));
-                    if !dest.exists() {
+                    if args.dryrun {
+                        println!("ln '{}' '{}'", src.display(), dest.display());
+                    } else if !dest.exists() {
                         hard_link(&src, &dest).unwrap_or_else(|e| {
                             eprintln!("Failed to link {:?} -> {:?}: {}", src, dest, e)
                         });
                     }
                 }
             }
+            if let Some(ref mut pb) = pb {
+                pb.inc();
+            }
+        }
+        if let Some(ref mut pb) = pb {
+            pb.finish_print("Done exporting versions");
         }
     } else {
         eprintln!("Specify --albums, --masters, or --versions for export.");
