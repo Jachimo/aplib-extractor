@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016-2023 Hubert Figuière
+ * Copyright (C) 2016-2025 Hubert Figuière
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -135,10 +135,10 @@ impl Report {
             plist_keys.difference(&known_keys).cloned().collect()
         };
         for key in ignored_keys {
-            if ns.is_none() {
+            if let Some(ns) = &ns {
+                let key = format!("{ns}.{key}");
                 self.ignore(&key);
             } else {
-                let key = format!("{}.{}", ns.as_ref().unwrap(), key);
                 self.ignore(&key);
             }
         }
