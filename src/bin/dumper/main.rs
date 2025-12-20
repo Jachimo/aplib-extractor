@@ -74,6 +74,8 @@ struct ExportArgs {
     out_dir: Option<String>,
     #[arg(long)]
     dryrun: bool,
+    #[arg(long)]
+    debug: bool, // Debug mode flag
     path: String,
 }
 
@@ -511,8 +513,7 @@ fn dump_versions(model_info: &ModelInfo, library: &mut Library) {
 }
 
 fn process_export(args: &ExportArgs) {
-    // Canonicalize the library path to an absolute path
-    let library_abs = fs::canonicalize(&args.path)
+    let library_abs = fs::canonicalize(&args.path)  // Canonicalize library path to abs path
         .expect("Failed to resolve absolute path to library");
 
     let mut library = Library::new(&args.path);
@@ -532,6 +533,14 @@ fn process_export(args: &ExportArgs) {
                 continue;
             }
             if let Some(StoreWrapper::Album(album)) = library.get(album_uuid) {
+                if args.debug {
+                    eprintln!(
+                        "[DEBUG] Album: '{}' UUID: {} content: {:?}",
+                        album.name.clone().unwrap_or_default(),
+                        album_uuid,
+                        album.content
+                    );
+                }
                 let album_name = sanitize_filename::sanitize(album.name.clone().unwrap_or_else(|| "Unnamed_Album".to_string()));
                 let album_dir = Path::new(out_dir).join(&album_name);
                 if args.dryrun {
@@ -541,8 +550,7 @@ fn process_export(args: &ExportArgs) {
                 }
 
                 if let Some(version_uuids) = &album.content {
-                    // Only show progress bar if not dryrun
-                    let mut pb = if !args.dryrun {
+                    let mut pb = if !args.dryrun {  // Only show progress bar if not dryrun
                         Some(ProgressBar::new(version_uuids.len() as u64))
                     } else {
                         None
@@ -559,6 +567,16 @@ fn process_export(args: &ExportArgs) {
                                         let dest = Path::new(&album_dir).join(
                                             Path::new(master.image_path.as_ref().unwrap()).file_name().unwrap()
                                         );
+                                        if args.debug {
+                                            eprintln!(
+                                                "[DEBUG] master_uuid={} src='{}' dest='{}' exists={} dest_exists={}",
+                                                master.uuid().as_ref().unwrap(),
+                                                src.display(),
+                                                dest.display(),
+                                                src.exists(),
+                                                dest.exists()
+                                            );
+                                        }
                                         if !src.exists() {
                                             eprintln!("Source file does not exist, skipping: '{}'", src.display());
                                             continue;
@@ -640,6 +658,16 @@ fn process_export(args: &ExportArgs) {
                                                 let dest = folder_path.join(
                                                     Path::new(master.image_path.as_ref().unwrap()).file_name().unwrap()
                                                 );
+                                                if args.debug {
+                                                    eprintln!(
+                                                        "[DEBUG] master_uuid={} src='{}' dest='{}' exists={} dest_exists={}",
+                                                        master.uuid().as_ref().unwrap(),
+                                                        src.display(),
+                                                        dest.display(),
+                                                        src.exists(),
+                                                        dest.exists()
+                                                    );
+                                                }
                                                 if !src.exists() {
                                                     eprintln!("Source file does not exist, skipping: '{}'", src.display());
                                                     continue;
@@ -658,6 +686,16 @@ fn process_export(args: &ExportArgs) {
                                         if let Some(file_name) = &version.file_name {
                                             let src = get_version_image_path(library_abs.to_str().unwrap(), version_uuid, file_name);
                                             let dest = folder_path.join(file_name);
+                                            if args.debug {
+                                                eprintln!(
+                                                    "[DEBUG] version_uuid={} src='{}' dest='{}' exists={} dest_exists={}",
+                                                    version.uuid().as_ref().unwrap(),
+                                                    src.display(),
+                                                    dest.display(),
+                                                    src.exists(),
+                                                    dest.exists()
+                                                );
+                                            }
                                             if !src.exists() {
                                                 eprintln!("Source file does not exist, skipping: '{}'", src.display());
                                                 continue;
@@ -706,6 +744,16 @@ fn process_export(args: &ExportArgs) {
             if let Some(StoreWrapper::Master(master)) = library.get(master_uuid) {
                 let src = library_abs.join(master.image_path.as_ref().unwrap());
                 let dest = masters_dir.join(Path::new(master.image_path.as_ref().unwrap()).file_name().unwrap());
+                if args.debug {
+                    eprintln!(
+                        "[DEBUG] master_uuid={} src='{}' dest='{}' exists={} dest_exists={}",
+                        master.uuid().as_ref().unwrap(),
+                        src.display(),
+                        dest.display(),
+                        src.exists(),
+                        dest.exists()
+                    );
+                }
                 if !src.exists() {
                     eprintln!("Source file does not exist, skipping: '{}'", src.display());
                     continue;
