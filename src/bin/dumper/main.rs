@@ -77,19 +77,51 @@ fn process_list(args: &Args) {
                 return;
             }
         }
-        library.load_volumes(PROGRESS_NONE);
-        library.load_masters(PROGRESS_NONE);
-
-        let masters = library.masters();
-        for master_uuid in masters {
-            if master_uuid.is_empty() {
-                continue;
+        if args.volumes {
+            library.load_volumes(PROGRESS_NONE);
+            let volumes = library.volumes();
+            for uuid in volumes {
+                if uuid.is_empty() {
+                    continue;
+                }
+                if let Some(StoreWrapper::Volume(volume)) = library.get(uuid) {
+                    let name = match &volume.volume_name {
+                        Some(n) => n.as_str(),
+                        None => "",
+                    };
+                    println!("{name}\t{uuid}");
+                }
             }
-            if let Some(master_path) = library.resolve_master_path(master_uuid) {
-                println!("{master_path}");
-            } else {
-                eprintln!("Can't resolve master path for {master_uuid}");
+        } else if args.albums {
+            library.load_albums(PROGRESS_NONE);
+            let albums = library.albums();
+            for uuid in albums {
+                if uuid.is_empty() {
+                    continue;
+                }
+                if let Some(StoreWrapper::Album(album)) = library.get(uuid) {
+                    let name = match &album.name {
+                        Some(n) => n.as_str(),
+                        None => "",
+                    };
+                    println!("{name}\t{uuid}");
+                }
             }
+        } else if args.masters {
+            library.load_masters(PROGRESS_NONE);
+            let masters = library.masters();
+            for master_uuid in masters {
+                if master_uuid.is_empty() {
+                    continue;
+                }
+                if let Some(master_path) = library.resolve_master_path(master_uuid) {
+                    println!("{master_path}");
+                } else {
+                    eprintln!("Can't resolve master path for {master_uuid}");
+                }
+            }
+        } else {
+            println!("Specify --albums, --volumes, --masters, etc.");
         }
     }
 }
