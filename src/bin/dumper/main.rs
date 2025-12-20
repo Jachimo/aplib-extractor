@@ -31,28 +31,46 @@ struct Args {
 
 #[derive(Clone, Debug, Subcommand)]
 enum Command {
+    /// Dump content of the library
     Dump(CommandArgs),
-    Audit(CommandArgs),
-    List(CommandArgs),
+    /// Audit the library to find unhandled properties
+    Audit(NoArgs),
+    /// List all masters
+    List(NoArgs),
+    /// Print the library tree
     Tree(tree::TreeArgs),
+}
+
+#[derive(Clone, Debug, Parser)]
+struct NoArgs {
+    /// Path to the Aperture Library
+    path: String,
 }
 
 #[derive(Clone, Debug, Parser)]
 struct CommandArgs {
     #[arg(long)]
+    /// Dump everything
     all: bool,
     #[arg(long)]
+    /// Dump the albums
     albums: bool,
     #[arg(long)]
+    /// Dump the versions (of images)
     versions: bool,
     #[arg(long)]
+    /// Dump the masters
     masters: bool,
     #[arg(long)]
+    /// Dump the folders
     folders: bool,
     #[arg(long)]
+    /// Dump the keywords
     keywords: bool,
     #[arg(long)]
+    /// Dump the volumes
     volumes: bool,
+    /// Path to the Aperture Library
     path: String,
 }
 
