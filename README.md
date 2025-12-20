@@ -25,6 +25,58 @@ To build the dumper tool:
 $ cargo build
 ```
 
+Usage
+-----
+
+```
+dumper <COMMAND> [OPTIONS] <LIBRARY_PATH>
+```
+
+Commands and Options:
+
+- `dump`  
+  Print detailed information about library contents.
+  - `--albums`      Dump albums.
+  - `--folders`     Dump folders.
+  - `--masters`     Dump master images.
+  - `--versions`    Dump edited versions.
+  - `--keywords`    Dump keywords.
+  - `--volumes`     Dump volumes.
+  - `--all`         Dump all supported types.
+
+- `list`  
+  Print a simple list of items.
+  - `--albums`      List albums.
+  - `--folders`     List folders.
+  - `--masters`     List master images.
+  - `--versions`    List edited versions.
+  - `--keywords`    List keywords.
+  - `--volumes`     List volumes.
+
+- `audit`  
+  Audit the library for inconsistencies.
+  - `--albums`      Audit albums.
+  - `--folders`     Audit folders.
+  - `--masters`     Audit master images.
+  - `--versions`    Audit edited versions.
+  - `--keywords`    Audit keywords.
+  - `--volumes`     Audit volumes.
+  - `--all`         Audit all supported types.
+
+- `tree`  
+  Print a tree view of the folder/album hierarchy.
+
+- `export`  
+  Export images as hardlinks.
+  - `--albums`      Export images into directories named after albums.
+  - `--masters`     Export original master files (default is edited versions).
+  - `--versions`    Export all edited versions as separate files.
+  - `--out-dir DIR` Output directory (default: current directory).
+
+Notes:
+- Source library and export destination must be on the same filesystem for `export`.
+- `<LIBRARY_PATH>` is the path to the Aperture library bundle.
+
 Other
 -----
 
