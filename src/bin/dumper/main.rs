@@ -6,7 +6,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+use std::fs;
+use std::fs::hard_link;
 use std::io::stderr;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 use num_traits::ToPrimitive;
@@ -35,6 +38,7 @@ enum Command {
     Audit(CommandArgs),
     List(CommandArgs),
     Tree(tree::TreeArgs),
+    Export(ExportArgs),
 }
 
 #[derive(Clone, Debug, Parser)]
@@ -56,6 +60,19 @@ struct CommandArgs {
     path: String,
 }
 
+#[derive(Clone, Debug, Parser)]
+struct ExportArgs {
+    #[arg(long)]
+    albums: bool,
+    #[arg(long)]
+    masters: bool,
+    #[arg(long)]
+    versions: bool,
+    #[arg(long)]
+    out_dir: Option<String>,
+    path: String,
+}
+
 fn main() {
     let args = Args::parse();
 
@@ -64,6 +81,7 @@ fn main() {
         Command::Audit(_) => process_audit(&args),
         Command::List(_) => process_list(&args),
         Command::Tree(args) => tree::process_tree(&args),
+        Command::Export(args) => process_export(&args),
     };
 }
 
@@ -486,4 +504,109 @@ fn dump_versions(model_info: &ModelInfo, library: &mut Library) {
             _ => println!("version {version_uuid} not found"),
         }
     }
+}
+
+fn process_export(args: &ExportArgs) {
+    let mut library = Library::new(&args.path);
+    let out_dir = args.out_dir.as_deref().unwrap_or(".");
+    fs::create_dir_all(out_dir).expect("Failed to create output directory");
+
+    if args.albums {
+        library.load_albums(PROGRESS_NONE);
+        library.load_versions(PROGRESS_NONE);
+        let albums = library.albums();
+        for album_uuid in albums {
+            if album_uuid.is_empty() {
+                continue;
+            }
+            if let Some(StoreWrapper::Album(album)) = library.get(album_uuid) {
+                let album_name = sanitize_filename::sanitize(album.name.clone().unwrap_or_else(|| "Unnamed_Album".to_string()));
+                let album_dir = Path::new(out_dir).join(&album_name);
+                fs::create_dir_all(&album_dir).expect("Failed to create album directory");
+
+                // Get all version UUIDs in this album
+                if let Some(version_uuids) = &album.content {
+                    for version_uuid in version_uuids {
+                        if let Some(StoreWrapper::Version(version)) = library.get(version_uuid) {
+                            if args.masters {
+                                // Export master
+                                if let Some(master_uuid) = &version.master_uuid {
+                                    if let Some(StoreWrapper::Master(master)) = library.get(master_uuid) {
+                                        let src = Path::new(&args.path).join(master.image_path.as_ref().unwrap());
+                                        let dest = Path::new(&album_dir).join(
+                                            Path::new(master.image_path.as_ref().unwrap()).file_name().unwrap()
+                                        );
+                                        if !dest.exists() {
+                                            hard_link(&src, &dest).unwrap_or_else(|e| eprintln!("Failed to link {:?} -> {:?}: {}", src, dest, e));
+                                        }
+                                    }
+                                }
+                            } else if let Some(file_name) = &version.file_name {
+                                let src = get_version_image_path(&args.path, version_uuid, file_name);
+                                let dest = Path::new(&album_dir).join(file_name);
+                                if !dest.exists() {
+                                    hard_link(&src, &dest).unwrap_or_else(|e| eprintln!("Failed to link {:?} -> {:?}: {}", src, dest, e));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else if args.masters {
+        library.load_masters(PROGRESS_NONE);
+        let masters = library.masters();
+        let masters_dir = Path::new(out_dir).join("Masters");
+        fs::create_dir_all(&masters_dir).expect("Failed to create Masters directory");
+        for master_uuid in masters {
+            if master_uuid.is_empty() {
+                continue;
+            }
+            if let Some(StoreWrapper::Master(master)) = library.get(master_uuid) {
+                let src = Path::new(&args.path).join(master.image_path.as_ref().unwrap());
+                let dest = masters_dir.join(Path::new(master.image_path.as_ref().unwrap()).file_name().unwrap());
+                if !dest.exists() {
+                    hard_link(&src, &dest).unwrap_or_else(|e| eprintln!("Failed to link {:?} -> {:?}: {}", src, dest, e));
+                }
+            }
+        }
+    } else if args.versions {
+        library.load_versions(PROGRESS_NONE);
+        let versions = library.versions();
+        let versions_dir = Path::new(out_dir).join("Versions");
+        fs::create_dir_all(&versions_dir).expect("Failed to create Versions directory");
+        for version_uuid in versions {
+            if version_uuid.is_empty() {
+                continue;
+            }
+            if let Some(StoreWrapper::Version(version)) = library.get(version_uuid) {
+                if let Some(file_name) = &version.file_name {
+                    let src = get_version_image_path(&args.path, version_uuid, file_name);
+                    let version_name = sanitize_filename::sanitize(
+                        version.name.clone().unwrap_or_else(|| version_uuid.clone()),
+                    );
+                    let ext = Path::new(file_name).extension().and_then(|e| e.to_str()).unwrap_or("jpg");
+                    let dest = versions_dir.join(format!("{}_{}.{}", version_name, &version_uuid[..8], ext));
+                    if !dest.exists() {
+                        hard_link(&src, &dest).unwrap_or_else(|e| {
+                            eprintln!("Failed to link {:?} -> {:?}: {}", src, dest, e)
+                        });
+                    }
+                }
+            }
+        }
+    } else {
+        eprintln!("Specify --albums, --masters, or --versions for export.");
+    }
+}
+
+fn get_version_image_path(library_path: &str, version_uuid: &str, file_name: &str) -> PathBuf {
+    // Database/Versions/XX/UUID.apversion/filename
+    let subdir = &version_uuid[0..2];
+    Path::new(library_path)
+        .join("Database")
+        .join("Versions")
+        .join(subdir)
+        .join(format!("{version_uuid}.apversion"))
+        .join(file_name)
 }
