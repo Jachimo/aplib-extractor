@@ -65,6 +65,8 @@ struct ExportArgs {
     #[arg(long)]
     albums: bool,
     #[arg(long)]
+    folders: bool,
+    #[arg(long)]
     masters: bool,
     #[arg(long)]
     versions: bool,
@@ -81,7 +83,7 @@ fn main() {
     match args.command {
         Command::Dump(_) => process_dump(&args),
         Command::Audit(_) => process_audit(&args),
-        Command::List(_) => process_list(&args),
+        Command::List(_) => process_list(&args), // TODO: Command::List(args) instead?
         Command::Tree(args) => tree::process_tree(&args),
         Command::Export(args) => process_export(&args),
     };
@@ -592,6 +594,94 @@ fn process_export(args: &ExportArgs) {
                 }
             }
         }
+    } else if args.folders {
+        library.load_folders(PROGRESS_NONE);
+        library.load_versions(PROGRESS_NONE);
+        library.load_masters(PROGRESS_NONE);
+
+        let folders = library.folders();
+        for folder_uuid in folders {
+            if folder_uuid.is_empty() {
+                continue;
+            }
+            if let Some(StoreWrapper::Folder(folder)) = library.get(folder_uuid) {
+                // Build the folder path in the output directory
+                let folder_path = if let Some(ref path) = folder.path {
+                    Path::new(out_dir).join(sanitize_filename::sanitize(path))
+                } else {
+                    continue;
+                };
+                if args.dryrun {
+                    println!("mkdir -p '{}'", folder_path.display());
+                } else {
+                    fs::create_dir_all(&folder_path).expect("Failed to create folder directory");
+                }
+
+                // Each folder has an implicit album containing its images
+                if let Some(implicit_album_uuid) = &folder.implicit_album_uuid {
+                    if let Some(StoreWrapper::Album(album)) = library.get(implicit_album_uuid) {
+                        if let Some(version_uuids) = &album.content {
+                            // Progress bar for this folder
+                            let mut pb = if !args.dryrun {
+                                Some(ProgressBar::new(version_uuids.len() as u64))
+                            } else {
+                                None
+                            };
+                            if let Some(ref mut pb) = pb {
+                                pb.message(&format!("Exporting folder: {} ", folder_path.display()));
+                            }
+                            for version_uuid in version_uuids {
+                                if args.masters {
+                                    // Export master for each version
+                                    if let Some(StoreWrapper::Version(version)) = library.get(version_uuid) {
+                                        if let Some(master_uuid) = &version.master_uuid {
+                                            if let Some(StoreWrapper::Master(master)) = library.get(master_uuid) {
+                                                let src = library_abs.join(master.image_path.as_ref().unwrap());
+                                                let dest = folder_path.join(
+                                                    Path::new(master.image_path.as_ref().unwrap()).file_name().unwrap()
+                                                );
+                                                if !src.exists() {
+                                                    eprintln!("Source file does not exist, skipping: '{}'", src.display());
+                                                    continue;
+                                                }
+                                                if args.dryrun {
+                                                    println!("ln '{}' '{}'", src.display(), dest.display());
+                                                } else if !dest.exists() {
+                                                    hard_link(&src, &dest).unwrap_or_else(|e| eprintln!("Failed to link {:?} -> {:?}: {}", src, dest, e));
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    // Export version (default)
+                                    if let Some(StoreWrapper::Version(version)) = library.get(version_uuid) {
+                                        if let Some(file_name) = &version.file_name {
+                                            let src = get_version_image_path(library_abs.to_str().unwrap(), version_uuid, file_name);
+                                            let dest = folder_path.join(file_name);
+                                            if !src.exists() {
+                                                eprintln!("Source file does not exist, skipping: '{}'", src.display());
+                                                continue;
+                                            }
+                                            if args.dryrun {
+                                                println!("ln '{}' '{}'", src.display(), dest.display());
+                                            } else if !dest.exists() {
+                                                hard_link(&src, &dest).unwrap_or_else(|e| eprintln!("Failed to link {:?} -> {:?}: {}", src, dest, e));
+                                            }
+                                        }
+                                    }
+                                }
+                                if let Some(ref mut pb) = pb {
+                                    pb.inc();
+                                }
+                            }
+                            if let Some(ref mut pb) = pb {
+                                pb.finish_print(&format!("Done folder: {}", folder_path.display()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
     } else if args.masters {
         library.load_masters(PROGRESS_NONE);
         let masters = library.masters();
@@ -679,12 +769,13 @@ fn process_export(args: &ExportArgs) {
             pb.finish_print("Done exporting versions");
         }
     } else {
-        eprintln!("Specify --albums, --masters, or --versions for export.");
+        eprintln!("Specify --albums, --folders, --masters, or --versions for export.");
     }
 }
 
 fn get_version_image_path(library_path: &str, version_uuid: &str, file_name: &str) -> PathBuf {
-    // Database/Versions/XX/UUID.apversion/filename
+    // Theoretically:  Database/Versions/XX/UUID.apversion/filename
+    // But my Aperture library doesn't seem to contain any, so this is untested...
     let subdir = &version_uuid[0..2];
     Path::new(library_path)
         .join("Database")
