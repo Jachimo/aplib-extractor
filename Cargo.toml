@@ -1,6 +1,6 @@
 [package]
 name = "aplib-extractor"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Hubert Figuière <hub@figuiere.net>"]
 edition = "2021"
 description = "Extract data from Apple Aperture™ libraries."
