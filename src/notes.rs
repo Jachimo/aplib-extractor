@@ -7,6 +7,7 @@
  */
 
 use chrono::{DateTime, Utc};
+use serde::{Serialize, Deserialize};
 
 use crate::audit::{
     audit_get_data_value, audit_get_date_value, audit_get_int_value, audit_get_str_value, Report,
@@ -14,7 +15,7 @@ use crate::audit::{
 };
 use crate::plutils::Value;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NotesProperties {
     attached_to_uuid: Option<String>,
     create_date: Option<DateTime<Utc>>,

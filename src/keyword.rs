@@ -13,9 +13,10 @@ use crate::plutils::*;
 use crate::store;
 use crate::AplibObject;
 use crate::AplibType;
+use serde::{Serialize, Deserialize};
 
 /// An Aperture keyword.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Keyword {
     /// The uuid
     uuid: Option<String>,
@@ -26,7 +27,7 @@ pub struct Keyword {
 
     /// Name of the keyword
     pub name: Option<String>,
-    /// Children keywords. Their parent_uuid will be self.uuid
+    /// Children keywords.  parent_uuid = self.uuid
     pub children: Option<Vec<Keyword>>,
 }
 

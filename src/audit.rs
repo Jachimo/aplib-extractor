@@ -9,13 +9,14 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
+use serde::{Serialize, Deserialize};
 
 use crate::plutils::{
     get_array_value, get_bool_value, get_data_value, get_date_value, get_dict_value, get_int_value,
     get_str_value, Value,
 };
 
-#[derive(thiserror::Error, Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
 pub enum SkipReason {
     #[error("No Reason")]
     /// No reason

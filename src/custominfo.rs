@@ -7,8 +7,9 @@
  */
 
 use crate::audit::{audit_get_str_value, Report};
+use serde::{Serialize, Deserialize};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CustomInfoProperties {
     pub camera_time_zone_name: Option<String>,
     pub picture_time_zone_name: Option<String>,

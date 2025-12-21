@@ -12,6 +12,7 @@ use std::time::SystemTime;
 use chrono::{DateTime, Utc};
 use exempi2::Xmp;
 use plist::Value;
+use serde::{Serialize, Deserialize};
 
 use crate::audit::{Report, SkipReason};
 use crate::xmp::ns::*;
@@ -111,7 +112,7 @@ lazy_static::lazy_static! {
     };
 }
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub enum ExifValue {
     #[default]
     None,
@@ -121,7 +122,7 @@ pub enum ExifValue {
     Real(f64),
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ExifProperties {
     pub bag: BTreeMap<String, ExifValue>,
 }

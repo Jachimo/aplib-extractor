@@ -8,6 +8,7 @@
 
 use chrono::{DateTime, Utc};
 use exempi2::Xmp;
+use serde::{Serialize, Deserialize};
 use std::path::Path;
 
 use crate::audit::{
@@ -24,7 +25,7 @@ use crate::AplibObject;
 use crate::AplibType;
 use crate::PlistLoadable;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// A rendered image. There is one for the orignal, and one per
 /// actual version. `Version` are associated to a `Master`.
 pub struct Version {

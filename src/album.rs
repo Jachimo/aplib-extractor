@@ -10,6 +10,7 @@ use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use num_traits::FromPrimitive;
+use serde::{Serialize, Deserialize};
 
 use crate::audit::{
     audit_get_bool_value, audit_get_date_value, audit_get_int_value, audit_get_str_value, Report,
@@ -23,23 +24,24 @@ use crate::PlistLoadable;
 
 #[derive(
     Clone, Copy, Debug, Default, num_derive::FromPrimitive, num_derive::ToPrimitive, PartialEq,
+    Serialize, Deserialize,
 )]
 #[repr(u32)]
 /// Subclass for album
 pub enum Subclass {
     #[default]
-    /// Invalid.
+    // Invalid - used for invalid albums
     Invalid = 0,
     /// Implicit - used for folders
     Implicit = 1,
-    /// Smart -
+    /// Smart - smart album with automatic content.
     Smart = 2,
     /// User - user album with explicit content.
     User = 3,
 }
 
-/// Album object.
-#[derive(Debug, Default)]
+/// Album object. Represents an album in the library.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Album {
     /// uuid
     uuid: Option<String>,

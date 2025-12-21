@@ -11,7 +11,9 @@ use std::path::Path;
 use crate::audit::{audit_get_int_value, audit_get_str_value, Report};
 use crate::store;
 use crate::{AplibObject, AplibType, PlistLoadable, Result, SqliteLoadable};
+use serde::{Serialize, Deserialize};
 
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Volume {
     uuid: Option<String>,
     model_id: Option<i64>,

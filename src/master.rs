@@ -10,6 +10,7 @@
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
+use serde::{Serialize, Deserialize};
 
 use crate::audit::{
     audit_get_array_value, audit_get_bool_value, audit_get_data_value, audit_get_date_value,
@@ -22,7 +23,7 @@ use crate::AplibType;
 use crate::PlistLoadable;
 
 /// A `Master` is a file backing an image (`Version`)
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Master {
     uuid: Option<String>,
     model_id: Option<i64>,

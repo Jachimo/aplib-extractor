@@ -7,7 +7,9 @@
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
+use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::FromPrimitive;
+use serde::{Serialize, Deserialize};
 
 use crate::audit::{
     audit_get_array_value, audit_get_bool_value, audit_get_date_value, audit_get_int_value,
@@ -19,22 +21,18 @@ use crate::AplibObject;
 use crate::AplibType;
 use crate::PlistLoadable;
 
-#[derive(
-    Clone, Copy, Debug, Default, num_derive::ToPrimitive, num_derive::FromPrimitive, PartialEq,
-)]
-#[repr(u32)]
-/// Type of folder
+#[derive(Debug, Clone, Serialize, Deserialize, FromPrimitive, ToPrimitive, PartialEq, Eq, Default)]
 pub enum Type {
     #[default]
-    Invalid = 0,
+    Invalid = -1,
     /// Folder, aka container of things
-    Folder = 1,
+    Folder = 0,
     /// Project (as in the UI), contains only `Master`s
-    Project = 2,
+    Project = 1,
 }
 
 /// Folder object. This is a container of things in the library.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Folder {
     /// object uuid
     uuid: Option<String>,
@@ -168,7 +166,7 @@ fn test_folder_parse() {
     assert_eq!(folder.uuid.as_ref().unwrap(), "a%TX9lmjQVWvuK9u6RNhGQ");
     assert_eq!(folder.parent_uuid.as_ref().unwrap(), "AllProjectsItem");
     assert_eq!(folder.model_id.unwrap(), 333);
-    assert_eq!(*folder.folder_type.as_ref().unwrap(), Type::Folder);
+    assert_eq!(*folder.folder_type.as_ref().unwrap(), FolderType::Folder);
     assert_eq!(folder.db_version.unwrap(), 110);
     assert!(folder.project_version.is_none());
     assert_eq!(folder.path.as_ref().unwrap(), "1/3/333/");

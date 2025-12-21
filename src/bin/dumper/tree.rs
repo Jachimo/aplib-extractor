@@ -66,10 +66,10 @@ fn print_children_for(uuid: &str, tree: &Tree, library: &Library, skip_masters: 
                 }
                 Wrapper::Folder(f) => {
                     let typ = match f.folder_type {
-                        Some(aplib::FolderType::Folder) => "F",
-                        Some(aplib::FolderType::Project) => "P",
-                        Some(aplib::FolderType::Invalid) => "*",
-                        _ => "",
+                        Some(aplib::Type::Invalid) => "*",
+                        Some(aplib::Type::Folder) => "F",
+                        Some(aplib::Type::Project) => "P",
+                        None => "?",
                     };
                     format!("F{typ}")
                 }

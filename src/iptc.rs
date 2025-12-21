@@ -14,6 +14,7 @@ use plist::Value;
 use crate::audit::{Report, SkipReason};
 use crate::xmp::ns::*;
 use crate::xmp::{ToXmp, XmpProperty, XmpTranslator};
+use serde::{Serialize, Deserialize};
 
 lazy_static::lazy_static! {
     /// HashMap for IPTC properties (Aperture) to XMP.
@@ -92,13 +93,13 @@ lazy_static::lazy_static! {
     };
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum IptcValue {
     None,
     Str(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IptcProperties {
     pub bag: BTreeMap<String, IptcValue>,
 }
