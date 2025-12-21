@@ -1,28 +1,31 @@
 aplib extractor
 ===============
 
-Extract the data from Apple Aperture™ libraries in order to facilitate
+> This is a fork of the [original aplib-extractor][orig] project, with
+> significant modifications and probably many new bugs added.  Please
+> do not bother the upstream maintainer with questions about this version.
+
+[orig]: https://github.com/hfiguiere/aplib-extractor
+
+Purpose: Extract data from Apple Aperture libraries in order to facilitate
 importing it into another application.
 
-Supported version are 3.x up to 3.6 (the final version).
+Supported versions are 3.x up to 3.6 (the final version).
 
-This is written in Rust.
+Written in Rust.
 
 Requires:
-- Rust and cargo (edition 2018)
-- exempi (pulled by the exempi2 crate)
+- Rust and cargo (2018+)
+- exempi (try `sudo apt install libexempi-dev`)
+- SQLite (try `sudo apt install libsqlite3-dev`)
 
 Building
 --------
 
-If you use this in your project, just add to your Cargo.toml:
-```toml
-aplib-extractor = { version = "0.1.0", default-features = false }
-```
 To build the dumper tool:
 
 ```shell
-$ cargo build
+$ cargo build --release
 ```
 
 Usage
@@ -67,7 +70,7 @@ Commands and Options:
   Print a tree view of the folder/album hierarchy.
 
 - `export`  
-  Export images as hardlinks.
+  Export images using hardlinks.
   - `--masters`     Export original master files (default is edited versions).
   - `--versions`    Export all edited versions as separate files.
   - `--albums`      Export images into directories named after albums.
@@ -78,7 +81,7 @@ If neither `--albums` nor `--folders` is passed, and `--masters` is passed,
 all master images are exported into a directory named `Masters` in the output directory.
 
 If neither `--albums` nor `--folders` is passed, and `--versions` is passed,
-all rendered, edited images are exported into a directory named `Versions` in the output directory.
+all rendered images are exported into a directory named `Versions` in the output directory.
 
 Notes:
 - Source library and export destination must be on the same filesystem for `export`.
@@ -86,12 +89,6 @@ Notes:
 - There is no guarantee that a rendered version exists for each Master image.
   Photos may lack versions because they were never rendered into a Preview, or if
   the library was cleaned.
-
-Other
------
-
-If you are interested in extracting Lightroom catalogs, there is the
-`lrcat` crate.
 
 License
 -------
@@ -101,6 +98,3 @@ License
   file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 See the LICENSE file in this repository.
-
-Maintainer:
-Hubert Figuière <hub@figuiere.net>
