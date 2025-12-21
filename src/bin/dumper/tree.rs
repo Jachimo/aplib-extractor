@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023 Hubert Figuière
+ * Copyright (C) 2023-2025 Hubert Figuière
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -19,7 +19,9 @@ const TOP_LEVEL: &str = "LibraryFolder";
 #[derive(Clone, Debug, Parser)]
 pub(crate) struct TreeArgs {
     #[arg(long)]
+    /// Don't display the masters
     skip_masters: bool,
+    /// Path to the Aperture Library
     path: String,
 }
 
