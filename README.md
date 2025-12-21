@@ -7,10 +7,10 @@ aplib extractor
 
 [orig]: https://github.com/hfiguiere/aplib-extractor
 
-Purpose: Extract data from Apple Aperture libraries in order to facilitate
-importing it into another application.
+Purpose: Extract data from Apple Aperture libraries in usable formats,
+to aid migration to other photo management applications.
 
-Supported versions are 3.x up to 3.6 (the final version).
+Supported versions of Aperture are 3.x up to 3.6 (the final version).
 
 Written in Rust.
 
@@ -77,18 +77,36 @@ Commands and Options:
   - `--out-dir DIR` Output directory (default: current directory).
   - `--dryrun`      Print shell commands for actions instead of performing them.
 
-If neither `--albums` nor `--folders` is passed, and `--masters` is passed,
-all master images are exported into a directory named `Masters` in the output directory.
 
-If neither `--albums` nor `--folders` is passed, and `--versions` is passed,
-all rendered images are exported into a directory named `Versions` in the output directory.
 
 Notes:
+- If neither `--albums` nor `--folders` is passed, and `--masters` is passed,
+  all master images are exported into a directory named `Masters` in the output directory.
+- If neither `--albums` nor `--folders` is passed, and `--versions` is passed,
+  all rendered images are exported into a directory named `Versions` in the output directory.
 - Source library and export destination must be on the same filesystem for `export`.
 - `<LIBRARY_PATH>` is the path to the Aperture library bundle.
 - There is no guarantee that a rendered version exists for each Master image.
   Photos may lack versions because they were never rendered into a Preview, or if
   the library was cleaned.
+
+
+Major Changes
+-------------
+
+Significant changes from upstream include:
+- Implement a new `export` command that uses hardlinks to create a directory structure containing
+  masters or versions in the Aperture library, organized by folders, albums, etc.
+- Use locally cached hashmaps to improve performance on repeated runs of the program,
+  especially if the Aperture library is on a network filesystem where accesses are expensive.
+  - The first run may still be slow (40 minutes for a 60k image library, using SMB over 1Gb Ethernet),
+    but subsequent runs will use the local cache if available.
+  - **Note that this feature assumes the Aperture Library is no longer being actively modified.**
+- Add a `--dryrun` option that shows the operations that the program would have run, but without
+  actually running them against the filesystem.
+  - Note that the commands shown are the rough shell equivalents of the operations that the program
+    will execute via the Rust `std::fs` API; it does not actually run the commands in a (sub)shell.
+
 
 License
 -------
