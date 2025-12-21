@@ -245,6 +245,8 @@ fn process_dump(args: &Args) {
         }
 
         let model_info = library.get_model_info().unwrap();
+        let library_abs = fs::canonicalize(&args.path).expect("Failed to resolve absolute path to library");
+
         println!("model info");
         println!("\tDB version: {}", model_info.db_version.unwrap_or(0));
         println!(
@@ -292,7 +294,7 @@ fn process_dump(args: &Args) {
         }
 
         if args.all || args.masters {
-            dump_masters(&model_info, &mut library);
+            dump_masters(&model_info, &mut library, &library_abs);
         }
         if args.all || args.versions {
             dump_versions(&model_info, &mut library);
@@ -436,7 +438,7 @@ fn dump_keywords(library: &mut Library) {
     }
 }
 
-fn dump_masters(model_info: &ModelInfo, library: &mut Library) {
+fn dump_masters(model_info: &ModelInfo, library: &mut Library, library_abs: &Path) {
     let count = model_info.master_count.unwrap_or(0) as u64;
     let mut pb = ProgressBar::on(stderr(), count);
 
@@ -447,9 +449,10 @@ fn dump_masters(model_info: &ModelInfo, library: &mut Library) {
     pb.finish();
 
     let masters = library.masters();
+    let master_root = get_master_root(library_abs); // Consistent w/ export
     println!("{} Masters:", masters.len());
-    println!("| uuid                   | project                | alternate              | mtyp | subt  | orig | path");
-    println!("+------------------------+------------------------+------------------------+------+-------+-----------------------");
+    println!("| uuid                   | project                | alternate              | mtyp | subt  | orig | path | exists");
+    println!("+------------------------+------------------------+------------------------+------+-------+-----------------------+--------");
     for master_uuid in masters {
         if master_uuid.is_empty() {
             continue;
@@ -463,8 +466,10 @@ fn dump_masters(model_info: &ModelInfo, library: &mut Library) {
                 let mtype = master.master_type.clone().unwrap_or_default();
                 let subtype = master.subtype.clone().unwrap_or_default();
                 let orig_uuid = master.original_version_uuid.clone().unwrap_or_default();
+                let abs_path = master_root.join(image_path);
+                let exists = abs_path.exists();
                 println!(
-                    "| {uuid:<22} | {parent:<22} | {alternate:<22} | {mtype:<4} | {subtype:<5} | {orig_uuid} | {image_path}",
+                    "| {uuid:<22} | {parent:<22} | {alternate:<22} | {mtype:<4} | {subtype:<5} | {orig_uuid} | {image_path} | {exists}",
                 )
             }
             _ => println!("master {master_uuid} not found"),
