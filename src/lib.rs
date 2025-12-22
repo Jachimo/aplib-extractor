@@ -20,7 +20,7 @@ pub mod plutils;
 mod store;
 mod version;
 mod volume;
-mod xmp;
+pub mod xmp;
 
 #[cfg(test)]
 mod testutils;

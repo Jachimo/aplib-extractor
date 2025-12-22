@@ -7,7 +7,6 @@
  */
 
 use chrono::{DateTime, Utc};
-use exempi2::Xmp;
 use serde::{Serialize, Deserialize};
 use std::path::Path;
 
@@ -20,10 +19,12 @@ use crate::exif::ExifProperties;
 use crate::iptc::IptcProperties;
 use crate::plutils::Value;
 use crate::store;
-use crate::xmp::ToXmp;
 use crate::AplibObject;
 use crate::AplibType;
 use crate::PlistLoadable;
+
+use crate::xmp::ToXmp;
+use exempi2::{Xmp, PropFlags};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// A rendered image. There is one for the orignal, and one per
@@ -169,15 +170,17 @@ impl AplibObject for Version {
 
 impl ToXmp for Version {
     fn to_xmp(&self, xmp: &mut Xmp) -> bool {
-        // Here we make sure the Exif data are
-        // processed before Iptc.
-        if let Some(ref exif) = self.exif {
-            exif.to_xmp(xmp);
+        let mut ok = true;
+        // VersionUUID
+        if let Some(ref uuid) = self.uuid {
+            ok &= xmp.set_property("http://ns.adobe.com/xap/1.0/", "VersionUUID", uuid, PropFlags::NONE).is_ok();
         }
-        if let Some(ref iptc) = self.iptc {
-            iptc.to_xmp(xmp);
+        // VersionFileName
+        if let Some(ref file_name) = self.file_name {
+            ok &= xmp.set_property("http://ns.adobe.com/xap/1.0/", "VersionFileName", file_name, PropFlags::NONE).is_ok();
         }
-        true
+        // Add more fields as needed, following the same pattern
+        ok
     }
 }
 

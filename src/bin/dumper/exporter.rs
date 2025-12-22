@@ -1,11 +1,16 @@
+use serde::Serialize;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::Library;
 use super::LibraryCache;
 
-/// Represents a single exportable image (master, versions, and metadata)
-#[derive(Debug)]
+use exempi2::Xmp;
+use exempi2::SerialFlags;
+use aplib::xmp::{ToXmp, XmpProperty, ns};
+
+#[derive(Debug, Serialize)]
 pub struct ExportJob {
     pub master_uuid: String,
     pub master_path: PathBuf,
@@ -14,6 +19,43 @@ pub struct ExportJob {
     pub version_paths: Vec<PathBuf>,
     pub version_filenames: Vec<String>,
     pub sidecar_filename: String,
+}
+
+fn export_job_files(job: &ExportJob, out_dir: &Path, cache: &LibraryCache) -> std::io::Result<()> {
+    // Copy master
+    let master_out = out_dir.join(&job.master_filename);
+    fs::copy(&job.master_path, &master_out)?;
+
+    // Copy versions
+    for (src, dest_name) in job.version_paths.iter().zip(&job.version_filenames) {
+        let dest = out_dir.join(dest_name);
+        fs::copy(src, dest)?;
+    }
+
+    // XMP sidecar file path
+    let sidecar_path = out_dir.join(&job.sidecar_filename);
+
+    let mut xmp = exempi2::Xmp::new();
+
+    // Master metadata
+    if let Some(master) = cache.master_map.get(&job.master_uuid) {
+        master.to_xmp(&mut xmp);
+    }
+    // All versions metadata (not sure if useful...))
+    for v_uuid in &job.version_uuids {
+        if let Some(version) = cache.version_map.get(v_uuid) {
+            version.to_xmp(&mut xmp);
+        }
+    }
+
+    let mut file = fs::File::create(&sidecar_path)?;
+
+    let xmp_string = xmp.serialize(SerialFlags::default(), 0)
+        .unwrap_or_else(|_| exempi2::XmpString::new());
+
+    file.write_all(xmp_string.to_string().as_bytes())?;
+
+    Ok(())
 }
 
 pub fn get_master_root(library_abs: &Path) -> PathBuf {
@@ -47,7 +89,13 @@ pub fn build_export_jobs(
 
     for (master_uuid, master) in &cache.master_map {
         // Master file info
-        let master_path = master_root.join(master.image_path.as_ref().unwrap());
+        let master_path = match master.image_path.as_ref() {
+            Some(p) => master_root.join(p),
+            None => {
+                eprintln!("Warning: master {} has no image_path, skipping.", master_uuid);
+                continue;
+            }
+        };        
         let master_filename = format!("{}_master{}", master_uuid, master_path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default());
 
         // Find all versions for this master
@@ -78,8 +126,8 @@ pub fn build_export_jobs(
             }
         }
 
-        // Sidecar filename (JSON for now)
-        let sidecar_filename = format!("{}_meta.json", master_uuid);
+        // XMP sidecar filename
+        let sidecar_filename = format!("{}.xmp", master_uuid);
 
         jobs.push(ExportJob {
             master_uuid: master_uuid.clone(),
@@ -128,30 +176,20 @@ pub fn process_export(args: &super::ExportArgs) {
     } else if args.versions {
         println!("Exporting versions is not yet implemented.");
     } else if args.all {
-        // Build export jobs
         let jobs = build_export_jobs(&library, &cache, &library_abs, out_dir);
         println!("Prepared {} export jobs (one per master).", jobs.len());
-        // TODO: For now, just print a summary of each job
         for job in &jobs {
             println!(
-                "Master: {} -> {}",
-                job.master_path.display(),
-                out_dir.join(&job.master_filename).display()
+                "Exporting master {} and {} versions...",
+                job.master_uuid,
+                job.version_uuids.len()
             );
-            for (v_uuid, v_path, v_file) in itertools::izip!(
-                &job.version_uuids,
-                &job.version_paths,
-                &job.version_filenames
-            ) {
-                println!(
-                    "  Version: {} -> {}",
-                    v_path.display(),
-                    out_dir.join(v_file).display()
-                );
+            if !args.dryrun {
+                if let Err(e) = export_job_files(job, out_dir, &cache) {
+                    eprintln!("Failed to export {}: {}", job.master_uuid, e);
+                }
             }
-            println!("  Sidecar: {}", out_dir.join(&job.sidecar_filename).display());
         }
-        // TODO: actual file copying and sidecar writing
     } else {
         eprintln!("Specify --albums, --folders, --masters, --versions, or --all for export.");
     }

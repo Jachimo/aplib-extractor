@@ -22,6 +22,9 @@ use crate::AplibObject;
 use crate::AplibType;
 use crate::PlistLoadable;
 
+use crate::xmp::ToXmp;
+use exempi2::{Xmp, PropFlags};
+
 /// A `Master` is a file backing an image (`Version`)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Master {
@@ -171,6 +174,22 @@ impl AplibObject for Master {
     }
     fn wrap(obj: Master) -> store::Wrapper {
         store::Wrapper::Master(Box::new(obj))
+    }
+}
+
+impl ToXmp for Master {
+    fn to_xmp(&self, xmp: &mut Xmp) -> bool {
+        let mut ok = true;
+        // MasterUUID
+        if let Some(ref uuid) = self.uuid {
+            ok &= xmp.set_property("http://ns.adobe.com/xap/1.0/", "MasterUUID", uuid, PropFlags::NONE).is_ok();
+        }
+        // MasterFileName
+        if let Some(ref file_name) = self.filename {
+            ok &= xmp.set_property("http://ns.adobe.com/xap/1.0/", "MasterFilename", file_name, PropFlags::NONE).is_ok();
+        }
+        // Add more fields as needed, following the same pattern
+        ok
     }
 }
 
