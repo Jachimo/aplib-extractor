@@ -2,7 +2,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::Library;
-
 use super::LibraryCache;
 
 /// Determine the master image root directory ("Masters" or library root)
@@ -49,16 +48,17 @@ pub fn process_export(args: &super::ExportArgs) {
         fs::create_dir_all(out_dir).expect("Failed to create output directory");
     }
 
-    // Now use cache.version_map, cache.master_map, etc. for all lookups
     if args.albums {
-        // ...move the albums export logic here from main.rs...
+        println!("Exporting albums is not yet implemented.");
     } else if args.folders {
-        // ...move the folders export logic here from main.rs...
+        println!("Exporting folders is not yet implemented.");
     } else if args.masters {
-        // ...move the masters export logic here from main.rs...
+        println!("Exporting masters is not yet implemented.");
     } else if args.versions {
-        // ...move the versions export logic here from main.rs...
+        println!("Exporting versions is not yet implemented.");
+    } else if args.all {
+        println!("Unified --all export is not yet implemented."); // TODO
     } else {
-        eprintln!("Specify --albums, --folders, --masters, or --versions for export.");
+        eprintln!("Specify --albums, --folders, --masters, --versions, or --all for export.");
     }
 }

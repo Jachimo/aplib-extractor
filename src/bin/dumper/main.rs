@@ -64,6 +64,8 @@ struct CommandArgs {
 #[derive(Clone, Debug, Parser)]
 struct ExportArgs {
     #[arg(long)]
+    all: bool,
+    #[arg(long)]
     albums: bool,
     #[arg(long)]
     folders: bool,
