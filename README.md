@@ -1,8 +1,8 @@
-aplib extractor
-===============
+Aperture Library Extractor
+==========================
 
 > This is a fork of the [original aplib-extractor][orig] project, with
-> significant modifications and probably many new bugs added.  Please
+> significant modifications and probably *many* new bugs added.  Please
 > do not bother the upstream maintainer with questions about this version.
 
 [orig]: https://github.com/hfiguiere/aplib-extractor
@@ -96,12 +96,14 @@ Major Changes
 
 Significant changes from upstream include:
 - Implement a new `export` command that uses hardlinks to create a directory structure containing
-  masters or versions in the Aperture library, organized by folders, albums, etc.
+  links to masters or versions from the Aperture library, organized by folder or album.
 - Use locally cached hashmaps to improve performance on repeated runs of the program,
   especially if the Aperture library is on a network filesystem where accesses are expensive.
   - The first run may still be slow (40 minutes for a 60k image library, using SMB over 1Gb Ethernet),
     but subsequent runs will use the local cache if available.
   - **Note that this feature assumes the Aperture Library is no longer being actively modified.**
+    If you are still actively using your Aperture Library (implying you have access to Aperture and a
+    Mac to run it on), there are probably many easier ways of exporting your data from it...
 - Add a `--dryrun` option that shows the operations that the program would have run, but without
   actually running them against the filesystem.
   - Note that the commands shown are the rough shell equivalents of the operations that the program

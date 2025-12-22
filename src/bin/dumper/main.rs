@@ -8,7 +8,6 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::fs::hard_link;
 use std::io::stderr;
 use std::path::{Path, PathBuf};
 
@@ -24,6 +23,7 @@ use aplib::ModelInfo;
 use aplib::StoreWrapper;
 use aplib::{AlbumSubclass, PROGRESS_NONE};
 
+mod exporter;
 mod tree;
 
 #[derive(Debug, Parser)]
@@ -81,7 +81,6 @@ struct ExportArgs {
 }
 
 use serde::{Serialize, Deserialize};
-use std::io::{self, Write};
 
 #[derive(Serialize, Deserialize)]
 struct LibraryCache {
@@ -163,7 +162,7 @@ fn main() {
         Command::Audit(_) => process_audit(&args),
         Command::List(_) => process_list(&args),
         Command::Tree(args) => tree::process_tree(&args),
-        Command::Export(args) => process_export(&args),
+        Command::Export(args) => exporter::process_export(&args),
     };
 }
 
@@ -187,7 +186,7 @@ fn process_list(args: &Args) {
                 if let Some(StoreWrapper::Volume(volume)) = library.get(uuid) {
                     let name = match &volume.volume_name {
                         Some(n) => n.as_str(),
-                        None => "",
+                        none => "",
                     };
                     println!("{name}\t{uuid}");
                 }
@@ -202,7 +201,7 @@ fn process_list(args: &Args) {
                 if let Some(StoreWrapper::Album(album)) = library.get(uuid) {
                     let name = match &album.name {
                         Some(n) => n.as_str(),
-                        None => "",
+                        none => "",
                     };
                     println!("{name}\t{uuid}");
                 }
@@ -543,7 +542,7 @@ fn dump_masters(model_info: &ModelInfo, library: &mut Library, library_abs: &Pat
     pb.finish();
 
     let masters = library.masters();
-    let master_root = get_master_root(library_abs); // Consistent w/ export
+    let master_root = exporter::get_master_root(library_abs); // Consistent w/ export
     println!("{} Masters:", masters.len());
     println!("| uuid                   | project                | alternate              | mtyp | subt  | orig | path | exists");
     println!("+------------------------+------------------------+------------------------+------+-------+-----------------------+--------");
@@ -604,407 +603,3 @@ fn dump_versions(model_info: &ModelInfo, cache: &LibraryCache) {
     }
 }
 
-fn process_export(args: &ExportArgs) {
-    let library_abs = fs::canonicalize(&args.path)
-        .expect("Failed to resolve absolute path to library");
-
-    let mut library = Library::new(&args.path);
-
-    let cache_path = {
-        use std::hash::{Hasher, Hash};
-        use std::collections::hash_map::DefaultHasher;
-        let mut hasher = DefaultHasher::new();
-        args.path.hash(&mut hasher);
-        let hash = hasher.finish();
-        PathBuf::from(format!("/tmp/aplib_cache_{hash:x}.bin"))
-    };
-    let cache = LibraryCache::new_or_load(&mut library, &cache_path);
-
-    let out_dir = args.out_dir.as_deref().unwrap_or(".");
-    if args.dryrun {
-        println!("mkdir -p '{}'", out_dir);
-    } else {
-        fs::create_dir_all(out_dir).expect("Failed to create output directory");
-    }
-
-    // Now use cache.version_map, cache.master_map, etc. for all lookups
-    if args.albums {
-        library.load_albums(PROGRESS_NONE);
-        let albums = library.albums();
-        for album_uuid in albums {
-            if album_uuid.is_empty() {
-                continue;
-            }
-            if let Some(StoreWrapper::Album(album)) = library.get(album_uuid) {
-                if args.debug {
-                    eprintln!(
-                        "[DEBUG] Album: '{}' UUID: {} content: {:?}",
-                        album.name.clone().unwrap_or_default(),
-                        album_uuid,
-                        album.content
-                    );
-                }
-                let album_name = sanitize_filename::sanitize(album.name.clone().unwrap_or_else(|| "Unnamed_Album".to_string()));
-                let album_dir = Path::new(out_dir).join(&album_name);
-                if args.dryrun {
-                    println!("mkdir -p '{}'", album_dir.display());
-                } else {
-                    fs::create_dir_all(&album_dir).expect("Failed to create album directory");
-                }
-
-                if let Some(version_uuids) = &album.content {
-                    let mut pb = if !args.dryrun {
-                        Some(ProgressBar::new(version_uuids.len() as u64))
-                    } else {
-                        None
-                    };
-                    if let Some(ref mut pb) = pb {
-                        pb.message(&format!("Exporting album: {} ", album_name));
-                    }
-                    for version_uuid in version_uuids {
-                        if args.debug {
-                            eprintln!("[DEBUG] Processing version_uuid: {}", version_uuid);
-                        }
-                        if let Some(version) = cache.version_map.get(version_uuid) {
-                            if args.debug {
-                                eprintln!(
-                                    "[DEBUG] Found version: uuid={} name={:?} master_uuid={:?}",
-                                    version.uuid().as_ref().unwrap_or(&"?".to_string()),
-                                    version.name,
-                                    version.master_uuid
-                                );
-                            }
-                            if args.masters {
-                                if let Some(master_uuid) = &version.master_uuid {
-                                    if let Some(master) = cache.master_map.get(master_uuid) {
-                                        let master_root = get_master_root(&library_abs);
-                                        let src = master_root.join(master.image_path.as_ref().unwrap());
-                                        let dest = Path::new(&album_dir).join(
-                                            Path::new(master.image_path.as_ref().unwrap()).file_name().unwrap()
-                                        );
-                                        if args.debug {
-                                            eprintln!(
-                                                "[DEBUG] master_uuid={} src='{}' dest='{}' src_exists={} dest_exists={}",
-                                                master.uuid().as_ref().unwrap(),
-                                                src.display(),
-                                                dest.display(),
-                                                src.exists(),
-                                                dest.exists()
-                                            );
-                                        }
-                                        if !src.exists() {
-                                            eprintln!("Source file does not exist, skipping: '{}'", src.display());
-                                            continue;
-                                        }
-                                        if args.dryrun {
-                                            println!("ln '{}' '{}'", src.display(), dest.display());
-                                        } else if !dest.exists() {
-                                            hard_link(&src, &dest).unwrap_or_else(|e| eprintln!("Failed to link {:?} -> {:?}: {}", src, dest, e));
-                                        }
-                                    } else if args.debug {
-                                        eprintln!("[DEBUG] Master not found for master_uuid: {}", master_uuid);
-                                    }
-                                } else if args.debug {
-                                    eprintln!("[DEBUG] Version has no master_uuid: {}", version_uuid);
-                                }
-                            } else if let Some(file_name) = &version.file_name {
-                                let src = get_version_image_path(library_abs.to_str().unwrap(), version_uuid, file_name);
-                                let dest = Path::new(&album_dir).join(file_name);
-                                if args.debug {
-                                    eprintln!(
-                                        "[DEBUG] version_uuid={} src='{}' dest='{}' src_exists={} dest_exists={}",
-                                        version_uuid,
-                                        src.display(),
-                                        dest.display(),
-                                        src.exists(),
-                                        dest.exists()
-                                    );
-                                }
-                                if !src.exists() {
-                                    eprintln!("Source file does not exist, skipping: '{}'", src.display());
-                                    continue;
-                                }
-                                if args.dryrun {
-                                    println!("ln '{}' '{}'", src.display(), dest.display());
-                                } else if !dest.exists() {
-                                    hard_link(&src, &dest).unwrap_or_else(|e| eprintln!("Failed to link {:?} -> {:?}: {}", src, dest, e));
-                                }
-                            }
-                        } else if args.debug {
-                            eprintln!("[DEBUG] Version not found for version_uuid: {}", version_uuid);
-                        }
-                    }
-                    if let Some(ref mut pb) = pb {
-                        pb.finish_print(&format!("Done album: {}", album_name));
-                    }
-                }
-            }
-        }
-    } else if args.folders {
-        library.load_folders(PROGRESS_NONE);
-        library.load_versions(PROGRESS_NONE);
-        library.load_masters(PROGRESS_NONE);
-
-        let folders = library.folders();
-        for folder_uuid in folders {
-            if folder_uuid.is_empty() {
-                continue;
-            }
-            if let Some(StoreWrapper::Folder(folder)) = library.get(folder_uuid) {
-                // Build the folder path in the output directory
-                let folder_path = if let Some(ref path) = folder.path {
-                    Path::new(out_dir).join(sanitize_filename::sanitize(path))
-                } else {
-                    continue;
-                };
-                if args.dryrun {
-                    println!("mkdir -p '{}'", folder_path.display());
-                } else {
-                    fs::create_dir_all(&folder_path).expect("Failed to create folder directory");
-                }
-
-                // Each folder has an implicit album containing its images
-                if let Some(implicit_album_uuid) = &folder.implicit_album_uuid {
-                    if let Some(StoreWrapper::Album(album)) = library.get(implicit_album_uuid) {
-                        if let Some(version_uuids) = &album.content {
-                            // Progress bar for this folder
-                            let mut pb = if !args.dryrun {
-                                Some(ProgressBar::new(version_uuids.len() as u64))
-                            } else {
-                                None
-                            };
-                            if let Some(ref mut pb) = pb {
-                                pb.message(&format!("Exporting folder: {} ", folder_path.display()));
-                            }
-                            for version_uuid in version_uuids {
-                                if args.debug {
-                                    eprintln!("[DEBUG] Processing version_uuid: {}", version_uuid);
-                                }
-                                if let Some(version) = cache.version_map.get(version_uuid) {
-                                    if args.debug {
-                                        eprintln!(
-                                            "[DEBUG] Found version: uuid={} name={:?} master_uuid={:?}",
-                                            version.uuid().as_ref().unwrap_or(&"?".to_string()),
-                                            version.name,
-                                            version.master_uuid
-                                        );
-                                    }
-                                    if args.masters {
-                                        if let Some(master_uuid) = &version.master_uuid {
-                                            if let Some(master) = cache.master_map.get(master_uuid) {
-                                                let master_root = get_master_root(&library_abs);
-                                                let src = master_root.join(master.image_path.as_ref().unwrap());
-                                                let dest = folder_path.join(
-                                                    Path::new(master.image_path.as_ref().unwrap()).file_name().unwrap()
-                                                );
-                                                if args.debug {
-                                                    eprintln!(
-                                                        "[DEBUG] master_uuid={} src='{}' dest='{}' src_exists={} dest_exists={}",
-                                                        master.uuid().as_ref().unwrap(),
-                                                        src.display(),
-                                                        dest.display(),
-                                                        src.exists(),
-                                                        dest.exists()
-                                                    );
-                                                }
-                                                if !src.exists() {
-                                                    eprintln!("Source file does not exist, skipping: '{}'", src.display());
-                                                    continue;
-                                                }
-                                                if args.dryrun {
-                                                    println!("ln '{}' '{}'", src.display(), dest.display());
-                                                } else if !dest.exists() {
-                                                    hard_link(&src, &dest).unwrap_or_else(|e| eprintln!("Failed to link {:?} -> {:?}: {}", src, dest, e));
-                                                }
-                                            }
-                                        }
-                                    } else {
-                                        // Export version (default)
-                                        if let Some(StoreWrapper::Version(version)) = library.get(version_uuid) {
-                                            if let Some(file_name) = &version.file_name {
-                                                let src = get_version_image_path(library_abs.to_str().unwrap(), version_uuid, file_name);
-                                                let dest = folder_path.join(file_name);
-                                                if args.debug {
-                                                    eprintln!(
-                                                        "[DEBUG] version_uuid={} src='{}' dest='{}' exists={} dest_exists={}",
-                                                        version.uuid().as_ref().unwrap(),
-                                                        src.display(),
-                                                        dest.display(),
-                                                        src.exists(),
-                                                        dest.exists()
-                                                    );
-                                                }
-                                                if !src.exists() {
-                                                    eprintln!("Source file does not exist, skipping: '{}'", src.display());
-                                                    continue;
-                                                }
-                                                if args.dryrun {
-                                                    println!("ln '{}' '{}'", src.display(), dest.display());
-                                                } else if !dest.exists() {
-                                                    hard_link(&src, &dest).unwrap_or_else(|e| eprintln!("Failed to link {:?} -> {:?}: {}", src, dest, e));
-                                                }
-                                            }
-                                        } else {
-                                            if let Some(version) = cache.version_map.get(version_uuid) {
-                                                if let Some(file_name) = &version.file_name {
-                                                    let src = get_version_image_path(library_abs.to_str().unwrap(), version_uuid, file_name);
-                                                    let dest = folder_path.join(file_name);
-                                                    if args.debug {
-                                                        eprintln!(
-                                                            "[DEBUG] version_uuid={} src='{}' dest='{}' exists={} dest_exists={}",
-                                                            version.uuid().as_ref().unwrap(),
-                                                            src.display(),
-                                                            dest.display(),
-                                                            src.exists(),
-                                                            dest.exists()
-                                                        );
-                                                    }
-                                                    if !src.exists() {
-                                                        eprintln!("Source file does not exist, skipping: '{}'", src.display());
-                                                        continue;
-                                                    }
-                                                    if args.dryrun {
-                                                        println!("ln '{}' '{}'", src.display(), dest.display());
-                                                    } else if !dest.exists() {
-                                                        hard_link(&src, &dest).unwrap_or_else(|e| eprintln!("Failed to link {:?} -> {:?}: {}", src, dest, e));
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    if let Some(ref mut pb) = pb {
-                                        pb.inc();
-                                    }
-                                }
-                            }
-                            if let Some(ref mut pb) = pb {
-                                pb.finish_print(&format!("Done folder: {}", folder_path.display()));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    } else if args.masters {
-        library.load_masters(PROGRESS_NONE);
-        let masters = library.masters();
-        let masters_dir = Path::new(out_dir).join("Masters");
-        if args.dryrun {
-            println!("mkdir -p '{}'", masters_dir.display());
-        } else {
-            fs::create_dir_all(&masters_dir).expect("Failed to create Masters directory");
-        }
-        let mut pb = if !args.dryrun {
-            Some(ProgressBar::new(masters.len() as u64))
-        } else {
-            None
-        };
-        if let Some(ref mut pb) = pb {
-            pb.message("Exporting masters ");
-        }
-        for master_uuid in masters {
-            if master_uuid.is_empty() {
-                continue;
-            }
-            if let Some(master) = cache.master_map.get(master_uuid) {
-                let master_root = get_master_root(&library_abs);
-                let src = master_root.join(master.image_path.as_ref().unwrap());
-                let dest = masters_dir.join(Path::new(master.image_path.as_ref().unwrap()).file_name().unwrap());
-                if args.debug {
-                    eprintln!(
-                        "[DEBUG] master_uuid={} src='{}' dest='{}' exists={} dest_exists={}",
-                        master.uuid().as_ref().unwrap(),
-                        src.display(),
-                        dest.display(),
-                        src.exists(),
-                        dest.exists()
-                    );
-                }
-                if !src.exists() {
-                    eprintln!("Source file does not exist, skipping: '{}'", src.display());
-                    continue;
-                }
-                if args.dryrun {
-                    println!("ln '{}' '{}'", src.display(), dest.display());
-                } else if !dest.exists() {
-                    hard_link(&src, &dest).unwrap_or_else(|e| eprintln!("Failed to link {:?} -> {:?}: {}", src, dest, e));
-                }
-            }
-            if let Some(ref mut pb) = pb {
-                pb.inc();
-            }
-        }
-        if let Some(ref mut pb) = pb {
-            pb.finish_print("Done exporting masters");
-        }
-    } else if args.versions {
-        library.load_versions(PROGRESS_NONE);
-        let versions = library.versions();
-        let versions_dir = Path::new(out_dir).join("Versions");
-        if args.dryrun {
-            println!("mkdir -p '{}'", versions_dir.display());
-        } else {
-            fs::create_dir_all(&versions_dir).expect("Failed to create Versions directory");
-        }
-        let mut pb = if !args.dryrun {
-            Some(ProgressBar::new(versions.len() as u64))
-        } else {
-            None
-        };
-        if let Some(ref mut pb) = pb {
-            pb.message("Exporting versions ");
-        }
-        for version_uuid in versions {
-            if version_uuid.is_empty() {
-                continue;
-            }
-            if let Some(version) = cache.version_map.get(version_uuid) {
-                if let Some(file_name) = &version.file_name {
-                    let src = get_version_image_path(library_abs.to_str().unwrap(), version_uuid, file_name);
-                    let version_name = sanitize_filename::sanitize(
-                        version.name.clone().unwrap_or_else(|| version_uuid.clone()),
-                    );
-                    let ext = Path::new(file_name).extension().and_then(|e| e.to_str()).unwrap_or("jpg");
-                    let dest = versions_dir.join(format!("{}_{}.{}", version_name, &version_uuid[..8], ext));
-                    if args.dryrun {
-                        println!("ln '{}' '{}'", src.display(), dest.display());
-                    } else if !dest.exists() {
-                        hard_link(&src, &dest).unwrap_or_else(|e| {
-                            eprintln!("Failed to link {:?} -> {:?}: {}", src, dest, e)
-                        });
-                    }
-                }
-            }
-            if let Some(ref mut pb) = pb {
-                pb.inc();
-            }
-        }
-        if let Some(ref mut pb) = pb {
-            pb.finish_print("Done exporting versions");
-        }
-    } else {
-        eprintln!("Specify --albums, --folders, --masters, or --versions for export.");
-    }
-}
-
-/// Determine the master image root directory ("Masters" or library root)
-fn get_master_root(library_abs: &Path) -> PathBuf {
-    let masters_dir = library_abs.join("Masters");
-    if masters_dir.is_dir() {
-        masters_dir
-    } else {
-        library_abs.to_path_buf()
-    }
-}
-
-fn get_version_image_path(library_path: &str, version_uuid: &str, file_name: &str) -> PathBuf {
-    // Theoretically:  Database/Versions/XX/UUID.apversion/filename
-    // But my Aperture library doesn't seem to contain any, so this is untested...
-    let subdir = &version_uuid[0..2];
-    Path::new(library_path)
-        .join("Database")
-        .join("Versions")
-        .join(subdir)
-        .join(format!("{version_uuid}.apversion"))
-        .join(file_name)
-}

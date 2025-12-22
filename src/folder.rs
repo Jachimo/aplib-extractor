@@ -166,7 +166,7 @@ fn test_folder_parse() {
     assert_eq!(folder.uuid.as_ref().unwrap(), "a%TX9lmjQVWvuK9u6RNhGQ");
     assert_eq!(folder.parent_uuid.as_ref().unwrap(), "AllProjectsItem");
     assert_eq!(folder.model_id.unwrap(), 333);
-    assert_eq!(*folder.folder_type.as_ref().unwrap(), FolderType::Folder);
+    assert_eq!(*folder.folder_type.as_ref().unwrap(), Type::Folder);
     assert_eq!(folder.db_version.unwrap(), 110);
     assert!(folder.project_version.is_none());
     assert_eq!(folder.path.as_ref().unwrap(), "1/3/333/");
