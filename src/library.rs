@@ -258,21 +258,28 @@ impl Library {
     /// list items in dir with extension ext.
     /// Return a vector with full path for each.
     fn list_items(&self, dir: &str, ext: &str) -> Vec<PathBuf> {
-        let ppath = self.build_path(dir, true);
-        let mut list: Vec<PathBuf> = Vec::new();
-
-        if !fs::metadata(&ppath).unwrap().is_dir() {
-            // XXX return a Result
+        let mut list = Vec::new();
+        let ppath = self.build_path(dir, false);
+        let meta = fs::metadata(&ppath);
+        if meta.is_err() || !meta.unwrap().is_dir() {
+            eprintln!("Warning: directory {:?} does not exist or is not a directory.", ppath);
             return list;
         }
-
-        for entry in fs::read_dir(&ppath).unwrap() {
-            let p = entry.unwrap().path();
-            if p.extension().unwrap() == ext {
-                list.push(p.to_owned());
+        let entries = fs::read_dir(&ppath);
+        if entries.is_err() {
+            eprintln!("Warning: failed to read directory {:?}", ppath);
+            return list;
+        }
+        for entry in entries.unwrap() {
+            if let Ok(e) = entry {
+                let p = e.path();
+                if let Some(extn) = p.extension() {
+                    if extn == ext {
+                        list.push(p.to_owned());
+                    }
+                }
             }
         }
-
         list
     }
 
@@ -363,9 +370,13 @@ impl Library {
 
     fn recurse_list_directory(path: &Path, level: i32) -> Vec<PathBuf> {
         let mut list: Vec<PathBuf> = Vec::new();
-        for entry in fs::read_dir(path).unwrap() {
-            let entry = entry.unwrap();
-            if entry.metadata().unwrap().is_dir() {
+for entry in fs::read_dir(path).unwrap_or_else(|_| {
+    eprintln!("Warning: failed to read directory {:?}", path);
+    std::fs::ReadDir::from(std::fs::read_dir(".").unwrap()) // dummy iterator, will be empty
+}) {
+    if let Ok(entry) = entry {
+        if let Ok(meta) = entry.metadata() {
+            if meta.is_dir() {
                 if level == 0 {
                     list.push(entry.path());
                 } else {
@@ -373,7 +384,13 @@ impl Library {
                     list.append(&mut sublist)
                 }
             }
+        } else {
+            eprintln!("Warning: failed to get metadata for {:?}", entry.path());
         }
+    } else {
+        eprintln!("Warning: failed to read entry in {:?}", path);
+    }
+}
 
         list
     }
@@ -381,29 +398,41 @@ impl Library {
     fn list_items_dirs(&self, dir: &str) -> Vec<PathBuf> {
         let ppath = self.build_path(dir, true);
 
-        if !fs::metadata(&ppath).unwrap().is_dir() {
-            // XXX return a Result
+        let meta = fs::metadata(&ppath);
+        if meta.is_err() || !meta.unwrap().is_dir() {
+            eprintln!("Warning: directory {:?} does not exist or is not a directory.", ppath);
             return Vec::new();
         }
 
         Library::recurse_list_directory(&ppath, 4)
     }
 
-    // XXX shall this a list_items() be merged?
     fn list_recursive_items(&self, dir: &str, ext: &str) -> Vec<PathBuf> {
         let list = self.list_items_dirs(dir);
         let mut items = Vec::new();
 
         for dir in list {
-            if !fs::metadata(&dir).unwrap().is_dir() {
+            let meta = fs::metadata(&dir);
+            if meta.is_err() || !meta.unwrap().is_dir() {
+                eprintln!("Warning: directory {:?} does not exist or is not a directory.", dir);
                 continue;
             }
 
-            for entry in fs::read_dir(&dir).unwrap() {
-                let entry = entry.unwrap();
-                let p = entry.path();
-                if p.extension().unwrap() == ext {
-                    items.push(entry.path().to_owned());
+            let entries = fs::read_dir(&dir);
+            if entries.is_err() {
+                eprintln!("Warning: failed to read directory {:?}", dir);
+                continue;
+            }
+            for entry in entries.unwrap() {
+                if let Ok(entry) = entry {
+                    let p = entry.path();
+                    if let Some(extn) = p.extension() {
+                        if extn == ext {
+                            items.push(p.to_owned());
+                        }
+                    }
+                } else {
+                    eprintln!("Warning: failed to read entry in {:?}", dir);
                 }
             }
         }

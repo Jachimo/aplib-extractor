@@ -24,10 +24,18 @@ pub struct ExportJob {
 fn export_job_files(job: &ExportJob, out_dir: &Path, cache: &LibraryCache) -> std::io::Result<()> {
     // Copy master
     let master_out = out_dir.join(&job.master_filename);
+    if !job.master_path.exists() {
+        eprintln!("Warning: master file {} does not exist, skipping.", job.master_path.display());
+        return Ok(());
+    }
     fs::copy(&job.master_path, &master_out)?;
 
     // Copy versions
     for (src, dest_name) in job.version_paths.iter().zip(&job.version_filenames) {
+        if !src.exists() {
+            eprintln!("Warning: version file {} does not exist, skipping.", src.display());
+            continue;
+        }
         let dest = out_dir.join(dest_name);
         fs::copy(src, dest)?;
     }
@@ -41,7 +49,7 @@ fn export_job_files(job: &ExportJob, out_dir: &Path, cache: &LibraryCache) -> st
     if let Some(master) = cache.master_map.get(&job.master_uuid) {
         master.to_xmp(&mut xmp);
     }
-    // All versions metadata (not sure if useful...))
+    // All versions metadata (not sure if useful...)
     for v_uuid in &job.version_uuids {
         if let Some(version) = cache.version_map.get(v_uuid) {
             version.to_xmp(&mut xmp);
