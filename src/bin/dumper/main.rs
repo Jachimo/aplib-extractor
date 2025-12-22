@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand};
 use num_traits::ToPrimitive;
 use pbr::ProgressBar;
+use serde_json;
 
 use aplib::audit::{Report, Reporter};
 use aplib::AplibObject;
@@ -78,7 +79,7 @@ struct ExportArgs {
     #[arg(long)]
     dryrun: bool,
     #[arg(long)]
-    debug: bool, // Debug mode flag
+    debug: bool,
     path: String,
 }
 
@@ -90,24 +91,26 @@ struct LibraryCache {
     master_map: HashMap<String, aplib::Master>,
     album_map: HashMap<String, aplib::Album>,
     folder_map: HashMap<String, aplib::Folder>,
-    // Add more if needed
 }
 
 impl LibraryCache {
     fn new_or_load(library: &mut Library, cache_path: &Path) -> Self {
         // Try to load cache from disk
-        if let Ok(data) = std::fs::read(cache_path) {
-            if let Ok(cache) = bincode::deserialize(&data) {
-                println!("Loaded cache from {}", cache_path.display());
-                return cache;
-            } else {
-                println!("Failed to deserialize cache, rebuilding...");
+        if let Ok(file) = std::fs::File::open(cache_path) {
+            match serde_json::from_reader(file) {
+                Ok(cache) => {
+                    println!("Loaded cache from {}", cache_path.display());
+                    return cache;
+                }
+                Err(e) => {
+                    println!("Failed to deserialize cache, rebuilding... Error: {e:?}");
+                }
             }
         } else {
             println!("No cache found at {}, building cache...", cache_path.display());
         }
 
-        // Build cache as before
+        // Build cache
         library.load_versions(PROGRESS_NONE);
         let mut version_map = HashMap::new();
         for version_uuid in library.versions() {
@@ -142,15 +145,15 @@ impl LibraryCache {
             album_map,
             folder_map,
         };
-        // Save cache to disk
-        if let Ok(data) = bincode::serialize(&cache) {
-            if let Err(e) = std::fs::write(cache_path, data) {
+        // Persist cache to disk
+        if let Ok(file) = std::fs::File::create(cache_path) {
+            if let Err(e) = serde_json::to_writer(file, &cache) {
                 eprintln!("Failed to write cache: {e}");
             } else {
                 println!("Wrote cache to {}", cache_path.display());
             }
         } else {
-            eprintln!("Failed to serialize cache");
+            eprintln!("Failed to create cache file {}", cache_path.display());
         }
         cache
     }

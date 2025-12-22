@@ -243,52 +243,84 @@ impl Library {
         Ok(&self.version)
     }
 
-    /// Build a path from the bundle root.
-    /// If database is true, will be from the Database subdirectory.
-    fn build_path(&self, dir: &str, database: bool) -> PathBuf {
-        let mut ppath = self.path.clone();
-        if database {
-            ppath.push(DATABASE_DIR);
-        }
-        ppath.push(dir);
-
-        ppath
+    /// Helper to build path relative to the library root
+    fn build_path(&self, subpath: &str, _is_dir: bool) -> PathBuf {
+        self.path.join(subpath)
     }
 
-    /// list items in dir with extension ext.
-    /// Return a vector with full path for each.
-    fn list_items(&self, dir: &str, ext: &str) -> Vec<PathBuf> {
-        let mut list = Vec::new();
-        let ppath = self.build_path(dir, false);
-        let meta = fs::metadata(&ppath);
-        if meta.is_err() || !meta.unwrap().is_dir() {
-            eprintln!("Warning: directory {:?} does not exist or is not a directory.", ppath);
-            return list;
+    /// Helper to find correct path for a given subdirectory (e.g., Albums or Folders)
+    fn resolve_subdir(&self, subdir: &str) -> Option<PathBuf> {
+        // First, try Database/<subdir>
+        let db_path = self.build_path(&format!("Database/{}", subdir), true);
+        if db_path.exists() && db_path.is_dir() {
+            return Some(db_path);
+        } else {
+            eprintln!(
+                "Debug: Database/{} not found in library, trying top-level {} directory.",
+                subdir, subdir
+            );
         }
-        let entries = fs::read_dir(&ppath);
+        // Fallback: try top-level <subdir>
+        let top_path = self.build_path(subdir, true);
+        if top_path.exists() && top_path.is_dir() {
+            eprintln!(
+                "Debug: Using top-level {} directory at {:?}.",
+                subdir, top_path
+            );
+            return Some(top_path);
+        } else {
+            eprintln!(
+                "Debug: No {} directory found at Database/{} or top-level.",
+                subdir, subdir
+            );
+        }
+        None
+    }
+
+    /// Recursively list directories up to a certain depth
+    fn recurse_list_directory(path: &Path, level: i32) -> Vec<PathBuf> {
+        let mut list: Vec<PathBuf> = Vec::new();
+        let entries = fs::read_dir(path);
         if entries.is_err() {
-            eprintln!("Warning: failed to read directory {:?}", ppath);
+            eprintln!("Warning: failed to read directory {:?}", path);
             return list;
         }
         for entry in entries.unwrap() {
-            if let Ok(e) = entry {
-                let p = e.path();
-                if let Some(extn) = p.extension() {
-                    if extn == ext {
-                        list.push(p.to_owned());
+            if let Ok(entry) = entry {
+                if let Ok(meta) = entry.metadata() {
+                    if meta.is_dir() {
+                        if level == 0 {
+                            list.push(entry.path());
+                        } else {
+                            let mut sublist = Library::recurse_list_directory(&entry.path(), level - 1);
+                            list.append(&mut sublist)
+                        }
                     }
+                } else {
+                    eprintln!("Warning: failed to get metadata for {:?}", entry.path());
                 }
+            } else {
+                eprintln!("Warning: failed to read entry in {:?}", path);
             }
         }
         list
     }
 
-    /// Return the model info block
-    pub fn get_model_info(&self) -> Option<ModelInfo> {
-        let ppath = self.build_path(DATAMODEL_VERSION_PLIST, true);
-        let plist = plutils::parse_plist(ppath);
-
-        ModelInfo::parse(&plist)
+    /// List items in Albums or Folders, using robust path resolution
+    fn list_items_dirs(&self, subdir: &str) -> Vec<PathBuf> {
+        let mut result = Vec::new();
+        if let Some(ppath) = self.resolve_subdir(subdir) {
+            let meta = fs::metadata(&ppath);
+            if meta.is_err() || !meta.unwrap().is_dir() {
+                eprintln!(
+                    "Warning: directory {:?} does not exist or is not a directory.",
+                    ppath
+                );
+                return Vec::new();
+            }
+            result = Library::recurse_list_directory(&ppath, 4);
+        }
+        result
     }
 
     /// Load items from directory `dir` with extension `ext`
@@ -303,7 +335,7 @@ impl Library {
         T: PlistLoadable + AplibObject,
         F: FnMut(u64) -> bool,
     {
-        let file_list = self.list_items(dir, ext);
+        let file_list = self.list_recursive_items(dir, ext);
         let audit = self.auditor.is_some();
         for file in file_list {
             let mut report = if audit { Some(Report::new()) } else { None };
@@ -368,45 +400,6 @@ impl Library {
         &self.folders
     }
 
-    fn recurse_list_directory(path: &Path, level: i32) -> Vec<PathBuf> {
-        let mut list: Vec<PathBuf> = Vec::new();
-for entry in fs::read_dir(path).unwrap_or_else(|_| {
-    eprintln!("Warning: failed to read directory {:?}", path);
-    std::fs::ReadDir::from(std::fs::read_dir(".").unwrap()) // dummy iterator, will be empty
-}) {
-    if let Ok(entry) = entry {
-        if let Ok(meta) = entry.metadata() {
-            if meta.is_dir() {
-                if level == 0 {
-                    list.push(entry.path());
-                } else {
-                    let mut sublist = Library::recurse_list_directory(&entry.path(), level - 1);
-                    list.append(&mut sublist)
-                }
-            }
-        } else {
-            eprintln!("Warning: failed to get metadata for {:?}", entry.path());
-        }
-    } else {
-        eprintln!("Warning: failed to read entry in {:?}", path);
-    }
-}
-
-        list
-    }
-
-    fn list_items_dirs(&self, dir: &str) -> Vec<PathBuf> {
-        let ppath = self.build_path(dir, true);
-
-        let meta = fs::metadata(&ppath);
-        if meta.is_err() || !meta.unwrap().is_dir() {
-            eprintln!("Warning: directory {:?} does not exist or is not a directory.", ppath);
-            return Vec::new();
-        }
-
-        Library::recurse_list_directory(&ppath, 4)
-    }
-
     fn list_recursive_items(&self, dir: &str, ext: &str) -> Vec<PathBuf> {
         let list = self.list_items_dirs(dir);
         let mut items = Vec::new();
@@ -447,7 +440,7 @@ for entry in fs::read_dir(path).unwrap_or_else(|_| {
     {
         use rusqlite::params;
 
-        let file_list = self.list_items(VOLUMES_DIR, ext);
+        let file_list = self.list_recursive_items(VOLUMES_DIR, ext);
         if file_list.is_empty() {
             // open the database and load from there.
             let mut objects = Vec::new();
@@ -639,5 +632,12 @@ for entry in fs::read_dir(path).unwrap_or_else(|_| {
             }
         }
         result
+    }
+
+    /// Load and return the ModelInfo for this library.
+    pub fn get_model_info(&self) -> Option<ModelInfo> {
+        let plist_path = self.build_path("Info.plist", false);
+        let plist = plutils::parse_plist(&plist_path);
+        ModelInfo::parse(&plist)
     }
 }
