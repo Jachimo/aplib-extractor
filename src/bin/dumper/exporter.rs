@@ -14,7 +14,6 @@ use std::path::{Path, PathBuf};
 use crate::Library;
 use super::LibraryCache;
 
-//use exempi2::Xmp;
 use exempi2::SerialFlags;
 use aplib::xmp::{ToXmp, XmpProperty, ns};
 
@@ -23,22 +22,27 @@ pub struct ExportJob {
     pub master_uuid: String,
     pub master_path: PathBuf,
     pub master_filename: String,
+    pub master_rel_dir: PathBuf, // relative directory for output
     pub version_uuids: Vec<String>,
     pub version_paths: Vec<PathBuf>,
     pub version_filenames: Vec<String>,
-    pub sidecar_filename: String,
+    // Removed: pub sidecar_filename: String,
 }
 
 fn export_job_files(job: &ExportJob, out_dir: &Path, cache: &LibraryCache) -> std::io::Result<()> {
+    // Create the output directory for the master (preserving the relative path)
+    let master_out_dir = out_dir.join(&job.master_rel_dir);
+    fs::create_dir_all(&master_out_dir)?;
+
     // Copy master
-    let master_out = out_dir.join(&job.master_filename);
+    let master_out = master_out_dir.join(&job.master_filename);
     if !job.master_path.exists() {
         eprintln!("Warning: master file {} does not exist, skipping.", job.master_path.display());
         return Ok(());
     }
     fs::copy(&job.master_path, &master_out)?;
 
-    // Write master XMP sidecar
+    // Write master XMP sidecar (same basename, .xmp extension)
     let master_sidecar = master_out.with_extension("xmp");
     let mut xmp = exempi2::Xmp::new();
     if let Some(master) = cache.master_map.get(&job.master_uuid) {
@@ -58,7 +62,7 @@ fn export_job_files(job: &ExportJob, out_dir: &Path, cache: &LibraryCache) -> st
         let dest = out_dir.join(dest_name);
         fs::copy(src, &dest)?;
 
-        // Write version XMP sidecar
+        // Write version XMP sidecar (same basename, .xmp extension)
         let version_sidecar = dest.with_extension("xmp");
         let mut xmp = exempi2::Xmp::new();
         if let Some(version) = cache.version_map.get(version_uuid) {
@@ -81,7 +85,12 @@ pub fn get_master_root(library_abs: &Path) -> PathBuf {
     if masters_dir.is_dir() {
         masters_dir
     } else {
-        library_abs.to_path_buf()
+        let db_masters_dir = library_abs.join("Database").join("Masters");
+        if db_masters_dir.is_dir() {
+            db_masters_dir
+        } else {
+            library_abs.to_path_buf()
+        }
     }
 }
 
@@ -107,20 +116,26 @@ pub fn build_export_jobs(
 
     for (master_uuid, master) in &cache.master_map {
         // Master file info
-        let master_path = match master.image_path.as_ref() {
-            Some(p) => master_root.join(p),
+        let image_path = match master.image_path.as_ref() {
+            Some(p) => p,
             None => {
                 eprintln!("Warning: master {} has no image_path, skipping.", master_uuid);
                 continue;
             }
-        };        
-        let master_filename = format!("{}_master{}", master_uuid, master_path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default());
+        };
+        let master_path = master_root.join(image_path);
 
-        // Find all versions for this master
+        // Compute the relative path (e.g., 2006/11/02/20061102-161812/PICT0019.JPG)
+        let rel_path = Path::new(image_path);
+
+        // The output path for the master will be out_dir/rel_path
+        let master_filename = rel_path.file_name().unwrap().to_string_lossy().to_string();
+        let master_rel_dir = rel_path.parent().unwrap_or_else(|| Path::new(""));
+
+        // Find all versions for this master (existing logic)
         let mut version_uuids = Vec::new();
         let mut version_paths = Vec::new();
         let mut version_filenames = Vec::new();
-
         for (version_uuid, version) in &cache.version_map {
             if version.master_uuid.as_ref() == Some(master_uuid) {
                 version_uuids.push(version_uuid.clone());
@@ -144,17 +159,15 @@ pub fn build_export_jobs(
             }
         }
 
-        // XMP sidecar filename
-        let sidecar_filename = format!("{}.xmp", master_uuid);
-
         jobs.push(ExportJob {
             master_uuid: master_uuid.clone(),
             master_path,
             master_filename,
+            master_rel_dir: master_rel_dir.to_path_buf(),
             version_uuids,
             version_paths,
             version_filenames,
-            sidecar_filename,
+            // Removed: sidecar_filename
         });
     }
     jobs
