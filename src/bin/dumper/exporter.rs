@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use crate::Library;
 use super::LibraryCache;
 
-use exempi2::Xmp;
+//use exempi2::Xmp;
 use exempi2::SerialFlags;
 use aplib::xmp::{ToXmp, XmpProperty, ns};
 
@@ -38,38 +38,40 @@ fn export_job_files(job: &ExportJob, out_dir: &Path, cache: &LibraryCache) -> st
     }
     fs::copy(&job.master_path, &master_out)?;
 
-    // Copy versions
-    for (src, dest_name) in job.version_paths.iter().zip(&job.version_filenames) {
+    // Write master XMP sidecar
+    let master_sidecar = master_out.with_extension("xmp");
+    let mut xmp = exempi2::Xmp::new();
+    if let Some(master) = cache.master_map.get(&job.master_uuid) {
+        master.to_xmp(&mut xmp);
+    }
+    let mut file = fs::File::create(&master_sidecar)?;
+    let xmp_string = xmp.serialize(SerialFlags::default(), 0)
+        .unwrap_or_else(|_| exempi2::XmpString::new());
+    file.write_all(xmp_string.to_string().as_bytes())?;
+
+    // Copy versions and write their sidecars
+    for ((src, dest_name), version_uuid) in job.version_paths.iter().zip(&job.version_filenames).zip(&job.version_uuids) {
         if !src.exists() {
             eprintln!("Warning: version file {} does not exist, skipping.", src.display());
             continue;
         }
         let dest = out_dir.join(dest_name);
-        fs::copy(src, dest)?;
-    }
+        fs::copy(src, &dest)?;
 
-    // XMP sidecar file path
-    let sidecar_path = out_dir.join(&job.sidecar_filename);
-
-    let mut xmp = exempi2::Xmp::new();
-
-    // Master metadata
-    if let Some(master) = cache.master_map.get(&job.master_uuid) {
-        master.to_xmp(&mut xmp);
-    }
-    // All versions metadata (not sure if useful...)
-    for v_uuid in &job.version_uuids {
-        if let Some(version) = cache.version_map.get(v_uuid) {
+        // Write version XMP sidecar
+        let version_sidecar = dest.with_extension("xmp");
+        let mut xmp = exempi2::Xmp::new();
+        if let Some(version) = cache.version_map.get(version_uuid) {
             version.to_xmp(&mut xmp);
+            // Add master reference
+            XmpProperty::new(ns::APLIB, "MasterUUID").put_into_xmp(&job.master_uuid, &mut xmp);
+            XmpProperty::new(ns::APLIB, "MasterFilename").put_into_xmp(&job.master_filename, &mut xmp);
         }
+        let mut file = fs::File::create(&version_sidecar)?;
+        let xmp_string = xmp.serialize(SerialFlags::default(), 0)
+            .unwrap_or_else(|_| exempi2::XmpString::new());
+        file.write_all(xmp_string.to_string().as_bytes())?;
     }
-
-    let mut file = fs::File::create(&sidecar_path)?;
-
-    let xmp_string = xmp.serialize(SerialFlags::default(), 0)
-        .unwrap_or_else(|_| exempi2::XmpString::new());
-
-    file.write_all(xmp_string.to_string().as_bytes())?;
 
     Ok(())
 }

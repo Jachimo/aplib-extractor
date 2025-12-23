@@ -33,7 +33,7 @@ const INFO_PLIST: &str = "Info.plist";
 const BUNDLE_IDENTIFIER: &str = "com.apple.Aperture.library";
 
 // in Database
-pub const DATAMODEL_VERSION_PLIST: &str = "DataModelVersion.plist";
+//pub const DATAMODEL_VERSION_PLIST: &str = "DataModelVersion.plist";
 pub const KEYWORDS_PLIST: &str = "Keywords.plist";
 pub const ALBUMS_DIR: &str = "Albums";
 pub const FOLDERS_DIR: &str = "Folders";
