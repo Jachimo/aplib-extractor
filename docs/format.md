@@ -12,12 +12,13 @@ App version | DB version | DB minor | Project vers
 3.6         | 110        | 226 (220)| 8
 
 
-## Bundle structure
+## Bundle Structure
 
-This is the file structure of the ".aplibrary" bundle for version 110. 
+Below is a tree view of the first several levels of an
+".aplibrary" bundle for database version 110. 
 
-The number between `[ ]` is the earliest DB minor we *saw* the file,
-if known.
+In the tree, the number between `[ ]` is the earliest 
+DB minor version where we *saw* the file, if known.
 
 ```
 LibraryName.aplibrary
@@ -119,20 +120,47 @@ LibraryName.aplibrary
 
 ## Bundle Contents
 
-### ApertureData.xml
+This section is not necessarily complete or exhaustive.
 
-`ApertureData.xml`: seems to contain a dump of the whole data model but
+### "ApertureData.xml" File
+
+The `ApertureData.xml` file seems to contain a dump of the whole data model but
 it seems to not be present everywhere.
 
-### Aperture.aplib
+### "Info.plist" File
 
-In some cases, this directory may only contain one file, `DataModelVersion.plist`.
+This XML-based plist file identifies the containing bundle (directory) as an Aperture Library.
 
-However, in other libraries, `Library.apdb` is also present.
-It appears to be a SQLite3 database.
-No further investigation of its contents has been done yet.
+Example contents for a Library called "Family Photos.aplib":
 
-### DataModelVersion.plist
+```
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleGetInfoString</key>
+	<string>Aperture Library 3.6</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.apple.Aperture.library</string>
+	<key>CFBundleName</key>
+	<string>Family Photos</string>
+	<key>CFBundleShortVersionString</key>
+	<string>3.6</string>
+</dict>
+</plist>
+```
+
+It's unclear if this file was mainly for operating system use, or for Aperture itself,
+or both.
+
+
+### "Aperture.aplib" Directory
+
+This directory seems to always be present inside the bundle root of the Aperture Library.
+
+#### "DataModelVersion.plist" File
+
+In some cases, `Aperture.aplib` may only contain one file: `DataModelVersion.plist`.
 
 It specifies the datamodel, the version for projects and a few other
 details
@@ -155,13 +183,22 @@ Properties:
 * `touchedByAperture` (bool): true ? (226)
 * `versionCount` (integer): count of versions (-226)
 
+#### Library.apdb
+
+In some Aperture libraries, a file named `Library.apdb` is also present inside
+`Aperture.aplib`.
+
+It appears to be a SQLite3 database.  Its purpose is unclear.
+(Performance optimization seems likely.)
+
+
 ### "Database" Directory
 
 `Database/Folders` is all the containers, folders, project, etc.
 The .apfolder files are binary plists.
 
-`Database/Albums` contain the albums from the library. The .apalbum
-files are binary plists.
+`Database/Albums` contain the albums from the library.
+The .apalbum files are binary plists.
 
 Common plist properties:
 
@@ -181,12 +218,12 @@ Common notes properties:
 
 Folders:
 
-* `note`: text note. For Aperture project it is in the project info
+* `note`: text note. For Aperture project it is in the project info.
 
 Masters:
 
 Master has `hasFocusPoints` set to true. 
-Attached in the notes:
+Also, attached in the notes:
 
 * `propertyKey`: focusPoints
 * `data`
@@ -194,8 +231,15 @@ Attached in the notes:
 
 ### "Database/Folders" Directory
 
-All Aperture "folders" are represented by GUID-named .apfolder files (binary plists)
+All Aperture "folders" are represented by GUID-named .apfolder files (plists)
 in the top level of the "Database/Folders" directory.
+
+#### ".apfolder" Files
+
+In *almost all* cases, these are binary plists (typically under 1kB length), but
+at least one Aperture library has been found which contains a mix of both binary
+and a few XML plist files, so parsing software should not blindly assume they
+are always binary.
 
 * `implicitAlbumUuid`: the uuid of the album that is representing the view
   (Subclass 2 album)
@@ -205,10 +249,17 @@ in the top level of the "Database/Folders" directory.
 
 ### "Database/Albums" Directory
 
-All Aperture "albums" are represented by GUID-named .apalbum files (binary plists)
+All Aperture "albums" are represented by GUID-named .apalbum files
 in the top level of the "Database/Albums" directory.
 
-Unlike other plist definitions, albums have two levels.
+#### ".apalbum" Files
+
+As with Folders, these plists are most often binary, but examples of
+XML plists *have* been found in actual Aperture Library examples.
+(See `+3dqw557RM2Z0nh2PzRW9Q.apalbum` in the "testdata" directory of
+this repo for an example.)
+
+Unlike other plist definitions, .apalbum files have two levels.
 
 Top-level properties:
 
@@ -218,7 +269,7 @@ Top-level properties:
 * `FilterInfo`: display filter. DATA.
 * `versionUuids`: An array of uuid: the versions it contains. (Subclass 3)
 
-#### InfoDictionary
+InfoDictionary properties:
 
 This is the main set of properties.
 
@@ -231,15 +282,16 @@ This is the main set of properties.
   * Sublclass 3 Albums are "user", ie created by the user to contain versions.
    (See the `versionUuids` array for the list of albums it contains.)
 
-### Keywords.plist
+### "Database/Keywords.plist" File
 
-Defines the keywords in the database. A plist with hierarchial keywords.
+Defines the keywords in the database.
+A plist with hierarchial keywords.
 
 Properties:
 * `keywords_verions` (integer): 6 or 7. Not sure which is what, I don't
   see difference otherwise.
 
-### Versions
+### "Database/Versions" Directory
 
 Contains edited versions of photos in the Library.
 
@@ -281,9 +333,15 @@ present, recreating it from the Version information is likely not possible.
 Recovering a Thumbnail or rendered Preview (from the appropriate directories
 in the Library) may, in some cases, be the best you can do.
 
-Information regarding each Master is in `Master.apmaster` in the GUID-named
-directory, while information about each Version is in the 
-`Version-N.apversion` files, where `N` is a unique integer, zero-indexed.
+### Versions
+
+Each GUID-named directory inside a dated leaf node (named according to 
+YYYYMMDD-HHMMSS) represents a *Version*, which is a set of lossless edits
+to a Master.
+
+Information regarding each Version's Master is in the `Master.apmaster` file,
+while information about each Version are in the `Version-N.apversion` files,
+where `N` is a unique integer, zero-indexed.
 
 Common properties:
 
@@ -292,9 +350,10 @@ Common properties:
   from EXIF or other metadata, or if it's the creation date of the logical
   structure within Aperture.)
 
-#### Master.apmaster
+#### "Master.apmaster" Files
 
-Binary plist file containing information about the master. 
+Property list (plist) file inside each Version directory, containing information
+about the master that the Version was derived from. 
 Each version has a master.
 
 * `type`: IMGT is image.
@@ -311,7 +370,7 @@ Each version has a master.
 * `colorSpaceDefinition`: Found with TIFF masters.
 * `faceDetectionState`: int. Values found: 9.
 
-#### Version-N.apversion
+#### "Version-N.apversion" Files
 
 Binary plist file containing information about a specific version of a
 master.  One master can (and frequently does, in practice) have multiple versions.
@@ -345,17 +404,13 @@ master.  One master can (and frequently does, in practice) have multiple version
 * `RKImageAdjustments`: array of dict for adjustement. Always one item
    for RAW decode.
 
-### Volumes
+### "Volumes" Directory
 
-Stores information related to filesystem volumes that Aperture knew about,
-including ones on which referenced Master files might have been stored.
+This directory, within "Database", stores information related to filesystem
+volumes that Aperture knew about, including ones on which referenced Master
+files might have been stored.
 
-It also includes the filesystem on which the Aperture Library itself was stored,
-and also volumes that contained Aperture "Vault" backups.
-(Note that the Aperture Vault format is different than the Aperture Library format,
-although it may share some internal structure.)
-
-#### [UUID].apvolume
+#### "[UUID].apvolume" Files
 
 A binary plist file, containing information a volume where files could be found.
 
@@ -364,10 +419,44 @@ A binary plist file, containing information a volume where files could be found.
 * `uuid`: the object UUID. Referenced from fileVolumeUuid in master
 * `volumeName`: OS volume name.
 
-### Masters
+### Other Items
 
-**Note**: There appear to be two locations where the `Masters` directory
-can be found.  In some (most?) libraries, it appears *directly* in the library bundle
-root, while based on some parsing code, it appears other developers have
-found it inside `Databases`.
+There are a variety of other files which can be found inside "Database", including
+but not limited to:
 
+* `ActiveWebPublishingAccounts.plist`
+* `KeywordSets.plist` - XML plist containing information about "Keyword Sets",
+  an Aperture feature that allowed a group of keywords to be added as a group.
+* `MasterGroups` (directory) - ??
+* `Places` (directory) - Contains `.applace` files.
+* `tmSync.plist` - Appears to contain information about when the Library was last
+  backed-up via Time Machine?  Keys include `tmSyncCounter` and `tmSyncUuid`.
+* `Vaults` (directory) - Contains one or more `.apvault` files, which presumably
+  contain information about connected or previously-connected Aperture Vaults.
+* `VersionGroups` (directory) - ??
+
+
+## Masters
+
+### Directory Location
+
+There appear to be two locations where the `Masters` directory
+can be found.  In most tested Libraries, it appears *directly* in the bundle
+root, but based on various examples of Library parsing code, it appears other
+developers have found it inside `Databases`.
+
+### Extraction
+
+Simply extracting Master items without any Aperture-specific metadata is trivial:
+the directory (once found), can simply be copied elsewhere and imported directly
+into another photo management program.
+
+Original files *should* be unchanged from when they were imported into Aperture,
+although this may not be the same format in which they were saved by the camera.
+Aperture had a variety of import options that could change the "master" format,
+including conversion from "camera raw" to DNG.
+
+**Extraction by Album** 
+
+To extract Masters while preserving the Album structure, the `.apalbum` files
+inside the `Database/Albums` directory must be parsed.
