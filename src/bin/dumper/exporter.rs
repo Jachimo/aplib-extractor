@@ -202,6 +202,7 @@ pub fn process_export(args: &super::ExportArgs) {
 
     // Currently we export all masters and versions *that exist in the Versions tree*
     // Note that "orphaned" masters (without versions) will not be exported!
+    // TODO: Create an option to either include or at least report a list of "orphans"
     let jobs = build_export_jobs(&library, &cache, &library_abs, out_dir);
     println!("Prepared {} export jobs (one per master).", jobs.len());
     for job in &jobs {

@@ -11,6 +11,8 @@ use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use serde::{Serialize, Deserialize};
+use exempi2::{Xmp, PropFlags};
+use base64;
 
 use crate::audit::{
     audit_get_array_value, audit_get_bool_value, audit_get_data_value, audit_get_date_value,
@@ -21,9 +23,8 @@ use crate::store;
 use crate::AplibObject;
 use crate::AplibType;
 use crate::PlistLoadable;
-
+use crate::xmp::ns;
 use crate::xmp::ToXmp;
-use exempi2::{Xmp, PropFlags};
 
 /// A `Master` is a file backing an image (`Version`)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,18 +178,149 @@ impl AplibObject for Master {
     }
 }
 
+// Create XMP for export for a Master 
 impl ToXmp for Master {
     fn to_xmp(&self, xmp: &mut Xmp) -> bool {
+
         let mut ok = true;
-        // MasterUUID
+
+        // Custom Aperture namespace for Aperture-specific fields
+        let aplib_ns = ns::APLIB;
+        let xmp_ns = "http://ns.adobe.com/xap/1.0/";
+        let exif_ns = "http://ns.adobe.com/exif/1.0/";
+        let tiff_ns = "http://ns.adobe.com/tiff/1.0/";
+
+        // UUID
         if let Some(ref uuid) = self.uuid {
-            ok &= xmp.set_property("http://ns.adobe.com/xap/1.0/", "MasterUUID", uuid, PropFlags::NONE).is_ok();
+            ok &= xmp.set_property(aplib_ns, "MasterUUID", uuid, PropFlags::NONE).is_ok();
         }
-        // MasterFileName
-        if let Some(ref file_name) = self.filename {
-            ok &= xmp.set_property("http://ns.adobe.com/xap/1.0/", "MasterFilename", file_name, PropFlags::NONE).is_ok();
+        // Model ID
+        if let Some(model_id) = self.model_id {
+            ok &= xmp.set_property(aplib_ns, "ModelID", &model_id.to_string(), PropFlags::NONE).is_ok();
         }
-        // Add more fields as needed, following the same pattern
+        // Project UUID
+        if let Some(ref project_uuid) = self.project_uuid {
+            ok &= xmp.set_property(aplib_ns, "ProjectUUID", project_uuid, PropFlags::NONE).is_ok();
+        }
+        // Alternate Master
+        if let Some(ref alternate_master) = self.alternate_master {
+            ok &= xmp.set_property(aplib_ns, "AlternateMaster", alternate_master, PropFlags::NONE).is_ok();
+        }
+        // Original Version UUID
+        if let Some(ref original_version_uuid) = self.original_version_uuid {
+            ok &= xmp.set_property(aplib_ns, "OriginalVersionUUID", original_version_uuid, PropFlags::NONE).is_ok();
+        }
+        // Import Group UUID
+        if let Some(ref import_group_uuid) = self.import_group_uuid {
+            ok &= xmp.set_property(aplib_ns, "ImportGroupUUID", import_group_uuid, PropFlags::NONE).is_ok();
+        }
+        // Filename
+        if let Some(ref filename) = self.filename {
+            ok &= xmp.set_property(tiff_ns, "FileName", filename, PropFlags::NONE).is_ok();
+        }
+        // Name
+        if let Some(ref name) = self.name {
+            ok &= xmp.set_property(xmp_ns, "Title", name, PropFlags::NONE).is_ok();
+        }
+        // Original Version Name
+        if let Some(ref original_version_name) = self.original_version_name {
+            ok &= xmp.set_property(aplib_ns, "OriginalVersionName", original_version_name, PropFlags::NONE).is_ok();
+        }
+        // DB Version
+        if let Some(db_version) = self.db_version {
+            ok &= xmp.set_property(aplib_ns, "DBVersion", &db_version.to_string(), PropFlags::NONE).is_ok();
+        }
+        // Master Type
+        if let Some(ref master_type) = self.master_type {
+            ok &= xmp.set_property(aplib_ns, "Type", master_type, PropFlags::NONE).is_ok();
+        }
+        // Subtype
+        if let Some(ref subtype) = self.subtype {
+            ok &= xmp.set_property(aplib_ns, "Subtype", subtype, PropFlags::NONE).is_ok();
+        }
+        // Image Path
+        if let Some(ref image_path) = self.image_path {
+            ok &= xmp.set_property(aplib_ns, "ImagePath", image_path, PropFlags::NONE).is_ok();
+        }
+        // Is Reference
+        if let Some(is_reference) = self.is_reference {
+            ok &= xmp.set_property(aplib_ns, "IsReference", &is_reference.to_string(), PropFlags::NONE).is_ok();
+        }
+        // Is Truly Raw
+        if let Some(is_truly_raw) = self.is_truly_raw {
+            ok &= xmp.set_property(aplib_ns, "IsTrulyRaw", &is_truly_raw.to_string(), PropFlags::NONE).is_ok();
+        }
+        // Is In Trash
+        if let Some(is_in_trash) = self.is_in_trash {
+            ok &= xmp.set_property(aplib_ns, "IsInTrash", &is_in_trash.to_string(), PropFlags::NONE).is_ok();
+        }
+        // Is Missing
+        if let Some(is_missing) = self.is_missing {
+            ok &= xmp.set_property(aplib_ns, "IsMissing", &is_missing.to_string(), PropFlags::NONE).is_ok();
+        }
+        // Is Externally Editable
+        if let Some(is_externaly_editable) = self.is_externaly_editable {
+            ok &= xmp.set_property(aplib_ns, "IsExternallyEditable", &is_externaly_editable.to_string(), PropFlags::NONE).is_ok();
+        }
+        // Create Date
+        if let Some(ref create_date) = self.create_date {
+            ok &= xmp.set_property(xmp_ns, "CreateDate", &create_date.to_rfc3339(), PropFlags::NONE).is_ok();
+        }
+        // Image Date
+        if let Some(ref image_date) = self.image_date {
+            ok &= xmp.set_property(xmp_ns, "ImageDate", &image_date.to_rfc3339(), PropFlags::NONE).is_ok();
+        }
+        // File Creation Date
+        if let Some(ref file_creation_date) = self.file_creation_date {
+            ok &= xmp.set_property(xmp_ns, "FileCreateDate", &file_creation_date.to_rfc3339(), PropFlags::NONE).is_ok();
+        }
+        // File Modification Date
+        if let Some(ref file_modification_date) = self.file_modification_date {
+            ok &= xmp.set_property(xmp_ns, "FileModifyDate", &file_modification_date.to_rfc3339(), PropFlags::NONE).is_ok();
+        }
+        // Original File Name
+        if let Some(ref original_file_name) = self.original_file_name {
+            ok &= xmp.set_property(tiff_ns, "OriginalFileName", original_file_name, PropFlags::NONE).is_ok();
+        }
+        // File Size
+        if let Some(file_size) = self.file_size {
+            ok &= xmp.set_property(aplib_ns, "FileSize", &file_size.to_string(), PropFlags::NONE).is_ok();
+        }
+        // File Volume UUID
+        if let Some(ref file_volume_uuid) = self.file_volume_uuid {
+            ok &= xmp.set_property(aplib_ns, "FileVolumeUUID", file_volume_uuid, PropFlags::NONE).is_ok();
+        }
+        // Color Space Name
+        if let Some(ref color_space_name) = self.color_space_name {
+            ok &= xmp.set_property(aplib_ns, "ColorSpaceName", color_space_name, PropFlags::NONE).is_ok();
+        }
+        // Pixel Format
+        if let Some(pixel_format) = self.pixel_format {
+            ok &= xmp.set_property(aplib_ns, "PixelFormat", &pixel_format.to_string(), PropFlags::NONE).is_ok();
+        }
+        // Has Focus Points
+        if let Some(has_focus_points) = self.has_focus_points {
+            ok &= xmp.set_property(aplib_ns, "HasFocusPoints", &has_focus_points.to_string(), PropFlags::NONE).is_ok();
+        }
+        // Image Format
+        if let Some(image_format) = self.image_format {
+            ok &= xmp.set_property(aplib_ns, "ImageFormat", &image_format.to_string(), PropFlags::NONE).is_ok();
+        }
+        // Face Detection State
+        if let Some(face_detection_state) = self.face_detection_state {
+            ok &= xmp.set_property(aplib_ns, "FaceDetectionState", &face_detection_state.to_string(), PropFlags::NONE).is_ok();
+        }
+        // Notes (as a string, if present)
+        if let Some(ref notes) = self.notes {
+            let notes_str = format!("{:?}", notes);
+            ok &= xmp.set_property(aplib_ns, "Notes", &notes_str, PropFlags::NONE).is_ok();
+        }
+        // Colour Space Definition (as base64, if present)
+        if let Some(ref colour_space_definition) = self.colour_space_definition {
+            let b64 = base64::encode(colour_space_definition);
+            ok &= xmp.set_property(aplib_ns, "ColorSpaceDefinition", &b64, PropFlags::NONE).is_ok();
+        }
+
         ok
     }
 }
