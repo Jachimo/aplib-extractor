@@ -26,10 +26,8 @@ use crate::version::Version;
 use crate::volume::Volume;
 use crate::{AplibObject, PlistLoadable, SqliteLoadable};
 
-// This is mostly from db_version = 110
-
+// This is based on Aperture db_version = 110
 const INFO_PLIST: &str = "Info.plist";
-
 const BUNDLE_IDENTIFIER: &str = "com.apple.Aperture.library";
 
 // in Database
@@ -40,6 +38,7 @@ pub const FOLDERS_DIR: &str = "Folders";
 pub const VOLUMES_DIR: &str = "Volumes";
 pub const VERSIONS_BASE_DIR: &str = "Versions";
 
+// for progress bar
 pub const PROGRESS_NONE: Option<fn(u64) -> bool> = None;
 
 /// Info of the library data model
@@ -95,7 +94,7 @@ pub struct Library {
     /// The path to the .aplib bundle (the directory)
     path: PathBuf,
 
-    /// It's version string (displayed by get info in the Finder)
+    /// Its version string (displayed by get info in the Finder)
     version: String,
 
     /// All the folders UUID
@@ -653,4 +652,125 @@ impl Library {
         let plist = plutils::parse_plist(&plist_path);
         ModelInfo::parse(&plist)
     }
+
+    /// Identify the Masters directory, print status, and return its PathBuf.
+    pub fn find_masters_dir(&self) -> Option<PathBuf> {
+        let root_masters = self.build_path("Masters", true);
+        if root_masters.exists() && root_masters.is_dir() {
+            println!("Using Masters directory at {}", root_masters.display());
+            Some(root_masters)
+        } else {
+            let db_masters = self.build_path("Database/Masters", true);
+            if db_masters.exists() && db_masters.is_dir() {
+                println!("Using Masters directory at {}", db_masters.display());
+                Some(db_masters)
+            } else {
+                println!("No Masters directory found in library.");
+                None
+            }
+        }
+    }
+
+    /// Identify the Versions directory, print status, and return its PathBuf.
+    pub fn find_versions_dir(&self) -> Option<PathBuf> {
+        let versions_dir = self.build_path("Database/Versions", true);
+        if versions_dir.exists() && versions_dir.is_dir() {
+            println!("Using Versions directory at {}", versions_dir.display());
+            Some(versions_dir)
+        } else {
+            println!("No Versions directory found in library.");
+            None
+        }
+    }
+
+    /// Recursively find all .apmaster files in the given versions directory.
+    pub fn find_apmaster_files(versions_dir: &Path) -> Vec<PathBuf> {
+        let mut result = Vec::new();
+        if let Ok(entries) = fs::read_dir(versions_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    result.extend(Self::find_apmaster_files(&path));
+                } else if let Some(ext) = path.extension() {
+                    if ext == "apmaster" {
+                        result.push(path);
+                    }
+                }
+            }
+        }
+        result
+    }
+
+/// Load masters by searching for .apmaster files in the Versions directory.
+pub fn load_masters_from_versions(&mut self) {
+    // Identify Masters directory (Masters or Database/Masters)
+    let masters_dir = match self.find_masters_dir() {
+        Some(dir) => dir,
+        None => {
+            println!("No Masters directory found; cannot load masters.");
+            return;
+        }
+    };
+    // Identify Versions directory (Database/Versions)
+    let versions_dir = match self.find_versions_dir() {
+        Some(dir) => dir,
+        None => {
+            println!("No Versions directory found; cannot load versions.");
+            return;
+        }
+    };
+
+    // Recursively find all .apmaster files in Versions directory
+    let apmaster_files = Self::find_apmaster_files(&versions_dir);
+    if apmaster_files.is_empty() {
+        println!("No .apmaster files found in Versions directory.");
+        return;
+    }
+
+    let mut masters: HashSet<String> = HashSet::new();
+    let mut pb = ProgressBar::on(stderr(), apmaster_files.len() as u64);
+    pb.message("Loading masters: ");
+    pb.set_max_refresh_rate(Some(std::time::Duration::from_millis(100)));
+
+    for apmaster_path in apmaster_files {
+        if let Some(master) = Master::from_path(&apmaster_path, None) {
+            if let Some(image_path) = master.image_path.as_ref() {
+                let master_image = masters_dir.join(image_path);
+                if master_image.exists() {
+                    // Use the master UUID if present, else fallback to apmaster path as unique key
+                    let uuid = if let Some(ref u) = master.uuid() {
+                        u.clone()
+                    } else {
+                        apmaster_path.to_string_lossy().to_string()
+                    };
+                    // Store in object store and track UUID
+                    if self.store(store::Wrapper::Master(Box::new(master))) {
+                        masters.insert(uuid);
+                    }
+                } else {
+                    println!(
+                        "Warning: Master image {} referenced by {} does not exist.",
+                        master_image.display(),
+                        apmaster_path.display()
+                    );
+                }
+            } else {
+                println!(
+                    "Warning: .apmaster file {} does not contain an imagePath.",
+                    apmaster_path.display()
+                );
+            }
+        } else {
+            println!(
+                "Warning: Failed to parse .apmaster file {}.",
+                apmaster_path.display()
+            );
+        }
+        pb.inc();
+    }
+    pb.finish();
+
+    // Update the masters set for downstream code
+    self.masters = masters;
+}
 }
