@@ -200,30 +200,20 @@ pub fn process_export(args: &super::ExportArgs) {
         fs::create_dir_all(out_dir).expect("Failed to create output directory");
     }
 
-    if args.albums {
-        println!("Exporting albums is not yet implemented.");
-    } else if args.folders {
-        println!("Exporting folders is not yet implemented.");
-    } else if args.masters {
-        println!("Exporting masters is not yet implemented.");
-    } else if args.versions {
-        println!("Exporting versions is not yet implemented.");
-    } else if args.all {
-        let jobs = build_export_jobs(&library, &cache, &library_abs, out_dir);
-        println!("Prepared {} export jobs (one per master).", jobs.len());
-        for job in &jobs {
-            println!(
-                "Exporting master {} and {} versions...",
-                job.master_uuid,
-                job.version_uuids.len()
-            );
-            if !args.dryrun {
-                if let Err(e) = export_job_files(job, out_dir, &cache) {
-                    eprintln!("Failed to export {}: {}", job.master_uuid, e);
-                }
+    // Currently we export all masters and versions *that exist in the Versions tree*
+    // Note that "orphaned" masters (without versions) will not be exported!
+    let jobs = build_export_jobs(&library, &cache, &library_abs, out_dir);
+    println!("Prepared {} export jobs (one per master).", jobs.len());
+    for job in &jobs {
+        println!(
+            "Exporting master {} and {} versions...",
+            job.master_uuid,
+            job.version_uuids.len()
+        );
+        if !args.dryrun {
+            if let Err(e) = export_job_files(job, out_dir, &cache) {
+                eprintln!("Failed to export {}: {}", job.master_uuid, e);
             }
         }
-    } else {
-        eprintln!("Specify --albums, --folders, --masters, --versions, or --all for export.");
     }
 }
