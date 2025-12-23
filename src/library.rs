@@ -8,9 +8,11 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::stderr;
 use std::path::{Path, PathBuf};
 
 use once_cell::unsync::OnceCell;
+use pbr::ProgressBar;
 use plist::Value;
 
 use crate::album::Album;
@@ -30,15 +32,13 @@ const INFO_PLIST: &str = "Info.plist";
 
 const BUNDLE_IDENTIFIER: &str = "com.apple.Aperture.library";
 
-const DATABASE_DIR: &str = "Database";
-
 // in Database
-const DATAMODEL_VERSION_PLIST: &str = "DataModelVersion.plist";
-const KEYWORDS_PLIST: &str = "Keywords.plist";
-const ALBUMS_DIR: &str = "Albums";
-const FOLDERS_DIR: &str = "Folders";
-const VOLUMES_DIR: &str = "Volumes";
-const VERSIONS_BASE_DIR: &str = "Versions";
+pub const DATAMODEL_VERSION_PLIST: &str = "DataModelVersion.plist";
+pub const KEYWORDS_PLIST: &str = "Keywords.plist";
+pub const ALBUMS_DIR: &str = "Albums";
+pub const FOLDERS_DIR: &str = "Folders";
+pub const VOLUMES_DIR: &str = "Volumes";
+pub const VERSIONS_BASE_DIR: &str = "Versions";
 
 pub const PROGRESS_NONE: Option<fn(u64) -> bool> = None;
 
@@ -400,7 +400,7 @@ impl Library {
         &self.folders
     }
 
-    fn list_recursive_items(&self, dir: &str, ext: &str) -> Vec<PathBuf> {
+    pub fn list_recursive_items(&self, dir: &str, ext: &str) -> Vec<PathBuf> {
         let list = self.list_items_dirs(dir);
         let mut items = Vec::new();
 
@@ -504,12 +504,23 @@ impl Library {
         }
     }
 
-    fn load_versions_items<T, F>(&mut self, ext: &str, set: &mut HashSet<String>, mut pg: Option<F>)
+    fn load_versions_items<T, F, P>(
+        &mut self,
+        ext: &str,
+        set: &mut HashSet<String>,
+        mut pg: Option<P>,
+    )
     where
         T: PlistLoadable + AplibObject,
         F: FnMut(u64) -> bool,
+        P: FnMut(u64) -> bool,
     {
+        println!("Scanning version directories (this may take a while on large libraries)...");
         let file_list = self.list_recursive_items(VERSIONS_BASE_DIR, ext);
+        let mut pb = ProgressBar::on(stderr(), file_list.len() as u64);
+        pb.message("Parsing versions: ");
+        pb.set_max_refresh_rate(Some(std::time::Duration::from_millis(100)));
+
         let audit = self.auditor.is_some();
         for file in file_list {
             let mut report = if audit { Some(Report::new()) } else { None };
@@ -537,6 +548,7 @@ impl Library {
                 }
                 println!("Error decoding object from {file:?}");
             }
+            pb.inc();
             if let Some(pg) = pg.as_mut() {
                 if !pg(1) {
                     println!("Cancelled!");
@@ -544,6 +556,7 @@ impl Library {
                 }
             }
         }
+        pb.finish();
     }
 
     /// Load volumess.
@@ -556,10 +569,10 @@ impl Library {
     }
 
     /// Load versions.
-    pub fn load_versions<F: FnMut(u64) -> bool>(&mut self, pg: Option<F>) {
+    pub fn load_versions<P: FnMut(u64) -> bool>(&mut self, pg: Option<P>) {
         if self.versions.is_empty() {
             let mut versions: HashSet<String> = HashSet::new();
-            self.load_versions_items::<Version, F>("apversion", &mut versions, pg);
+            self.load_versions_items::<Version, P, P>("apversion", &mut versions, pg);
             self.versions = versions;
         }
     }
@@ -568,7 +581,7 @@ impl Library {
     pub fn load_masters<F: FnMut(u64) -> bool>(&mut self, pg: Option<F>) {
         if self.masters.is_empty() {
             let mut masters: HashSet<String> = HashSet::new();
-            self.load_versions_items::<Master, F>("apmaster", &mut masters, pg);
+            self.load_versions_items::<Master, F, F>("apmaster", &mut masters, pg);
             self.masters = masters;
         }
     }
