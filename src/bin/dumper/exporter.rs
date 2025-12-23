@@ -30,7 +30,7 @@ pub struct ExportJob {
 }
 
 fn export_job_files(job: &ExportJob, out_dir: &Path, cache: &LibraryCache) -> std::io::Result<()> {
-    // Create the output directory for the master (preserving the relative path)
+    // Create the output directory for the master (preserving the relative path including date-time folder)
     let master_out_dir = out_dir.join(&job.master_rel_dir);
     fs::create_dir_all(&master_out_dir)?;
 
@@ -59,7 +59,10 @@ fn export_job_files(job: &ExportJob, out_dir: &Path, cache: &LibraryCache) -> st
             eprintln!("Warning: version file {} does not exist, skipping.", src.display());
             continue;
         }
-        let dest = out_dir.join(dest_name);
+        // Place version in the same subdirectory as the master
+        let version_out_dir = master_out_dir.clone();
+        fs::create_dir_all(&version_out_dir)?;
+        let dest = version_out_dir.join(dest_name);
         fs::copy(src, &dest)?;
 
         // Write version XMP sidecar (same basename, .xmp extension)
@@ -130,7 +133,7 @@ pub fn build_export_jobs(
 
         // The output path for the master will be out_dir/rel_path
         let master_filename = rel_path.file_name().unwrap().to_string_lossy().to_string();
-        let master_rel_dir = rel_path.parent().unwrap_or_else(|| Path::new(""));
+        let master_rel_dir = rel_path.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
 
         // Find all versions for this master (existing logic)
         let mut version_uuids = Vec::new();
@@ -163,11 +166,10 @@ pub fn build_export_jobs(
             master_uuid: master_uuid.clone(),
             master_path,
             master_filename,
-            master_rel_dir: master_rel_dir.to_path_buf(),
+            master_rel_dir,
             version_uuids,
             version_paths,
             version_filenames,
-            // Removed: sidecar_filename
         });
     }
     jobs
