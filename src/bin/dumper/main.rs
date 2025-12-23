@@ -191,7 +191,7 @@ fn process_list(args: &Args) {
                 if let Some(StoreWrapper::Volume(volume)) = library.get(uuid) {
                     let name = match &volume.volume_name {
                         Some(n) => n.as_str(),
-                        none => "",
+                        None => "",
                     };
                     println!("{name}\t{uuid}");
                 }
@@ -206,7 +206,7 @@ fn process_list(args: &Args) {
                 if let Some(StoreWrapper::Album(album)) = library.get(uuid) {
                     let name = match &album.name {
                         Some(n) => n.as_str(),
-                        none => "",
+                        None => "",
                     };
                     println!("{name}\t{uuid}");
                 }
