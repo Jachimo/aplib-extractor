@@ -97,6 +97,10 @@ impl LibraryCache {
     fn new_or_load(library: &mut Library, cache_path: &Path) -> Self {
         // Try to load cache from disk
         if let Ok(file) = std::fs::File::open(cache_path) {
+            println!(
+                "Found existing cache file at {}. Reading / deserializing...",
+                cache_path.display()
+            );
             match serde_json::from_reader(file) {
                 Ok(cache) => {
                     println!("Loaded cache from {}", cache_path.display());
@@ -110,35 +114,58 @@ impl LibraryCache {
             println!("No cache found at {}, building cache...", cache_path.display());
         }
 
-        // Build cache
-        library.load_versions(PROGRESS_NONE);
+        // Build cache with progress bars
+        println!("Building version cache...");
+
+        library.load_versions::<fn(u64) -> bool>(None); // dummy closure type to make rust stop complaining
+
+        let versions = library.versions();
         let mut version_map = HashMap::new();
-        for version_uuid in library.versions() {
+        for version_uuid in versions {
             if let Some(StoreWrapper::Version(version)) = library.get(version_uuid) {
                 version_map.insert(version_uuid.to_owned(), (**version).clone());
             }
         }
+
+        println!("Building master cache...");
         library.load_masters(PROGRESS_NONE);
+        let masters = library.masters();
+        let mut pb = ProgressBar::on(stderr(), masters.len() as u64);
         let mut master_map = HashMap::new();
-        for master_uuid in library.masters() {
+        for master_uuid in masters {
             if let Some(StoreWrapper::Master(master)) = library.get(master_uuid) {
                 master_map.insert(master_uuid.to_owned(), (**master).clone());
             }
+            pb.inc();
         }
+        pb.finish();
+
+        println!("Building album cache...");
         library.load_albums(PROGRESS_NONE);
+        let albums = library.albums();
+        let mut pb = ProgressBar::on(stderr(), albums.len() as u64);
         let mut album_map = HashMap::new();
-        for album_uuid in library.albums() {
+        for album_uuid in albums {
             if let Some(StoreWrapper::Album(album)) = library.get(album_uuid) {
                 album_map.insert(album_uuid.to_owned(), (**album).clone());
             }
+            pb.inc();
         }
+        pb.finish();
+
+        println!("Building folder cache...");
         library.load_folders(PROGRESS_NONE);
+        let folders = library.folders();
+        let mut pb = ProgressBar::on(stderr(), folders.len() as u64);
         let mut folder_map = HashMap::new();
-        for folder_uuid in library.folders() {
+        for folder_uuid in folders {
             if let Some(StoreWrapper::Folder(folder)) = library.get(folder_uuid) {
                 folder_map.insert(folder_uuid.to_owned(), (**folder).clone());
             }
+            pb.inc();
         }
+        pb.finish();
+
         let cache = Self {
             version_map,
             master_map,
