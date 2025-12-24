@@ -15,7 +15,7 @@ Supported versions of Aperture are 3.x up to 3.6 (the final version).
 Written in Rust.
 
 Requires:
-- Rust and cargo (2018+)
+- Rust and Cargo ([install instructions](https://rust-lang.org/tools/install/))
 - exempi (try `sudo apt install libexempi-dev`)
 - SQLite (try `sudo apt install libsqlite3-dev`)
 
@@ -31,7 +31,7 @@ $ cargo build --release
 Usage
 -----
 
-```
+```shell
 dumper <COMMAND> [OPTIONS] <LIBRARY_PATH>
 ```
 
@@ -71,12 +71,8 @@ Commands and Options:
 
 - `export`  
   Export images to the working directory.
-  - `--masters`     Export original master files (default is edited versions).
-  - `--versions`    Export all edited versions as separate files.
-  - `--all`         Export all masters and all versions.
-  - `--albums`      Export images into directories named after albums.
   - `--out-dir DIR` Output directory (default: current directory).
-  - `--dryrun`      Print shell commands for actions instead of performing them.
+  - `--dryrun`      Print shell commands for file operations instead of performing them.
 
 Notes:
 - `<LIBRARY_PATH>` is the path to the Aperture library bundle.
@@ -89,8 +85,8 @@ Major Changes
 -------------
 
 Significant changes from upstream include:
-- Implement a new `export` command that uses hardlinks to create a directory structure containing
-  links to masters or versions from the Aperture library, organized by folder or album.
+- Implement a new `export` command that copies master/version images and their accompanying metadata
+  from the Aperture Library, to facilitate migration to other management systems (e.g. [DigiKam][]).
 - Use locally cached hashmaps to improve performance on repeated runs of the program,
   especially if the Aperture library is on a network filesystem where accesses are expensive.
   - The first run may still be slow (40 minutes for a 60k image library, using SMB over 1Gb Ethernet),
@@ -102,6 +98,8 @@ Significant changes from upstream include:
   actually running them against the filesystem.
   - Note that the commands shown are the rough shell equivalents of the operations that the program
     will execute via the Rust `std::fs` API; it does not actually run the commands in a (sub)shell.
+
+[DigiKam]: https://www.digikam.org/
 
 
 License
