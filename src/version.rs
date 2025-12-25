@@ -65,6 +65,9 @@ pub struct Version {
     pub exif: Option<ExifProperties>,
     pub custom_info: Option<CustomInfoProperties>,
     pub keywords: Option<Vec<Value>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_aplib_fields: Option<std::collections::BTreeMap<String, String>>,
 }
 
 impl PlistLoadable for Version {
@@ -118,6 +121,7 @@ impl PlistLoadable for Version {
                     exif: ExifProperties::from(&exif, &mut auditor),
                     custom_info: CustomInfoProperties::from(&custom_info, &mut auditor),
                     keywords: audit_get_array_value(dict, "keywords", &mut auditor),
+                    custom_aplib_fields: dict_to_btreemap(audit_get_dict_value(dict, "customAplibFields", &mut auditor)),
                 });
                 if let Some(auditor) = &mut auditor {
                     auditor.skip("statistics", SkipReason::Ignore);
@@ -179,9 +183,22 @@ impl ToXmp for Version {
         if let Some(ref file_name) = self.file_name {
             ok &= xmp.set_property("http://ns.adobe.com/xap/1.0/", "VersionFileName", file_name, PropFlags::NONE).is_ok();
         }
-        // Add more fields as needed, following the same pattern
-        ok
+        // Other custom fields in app-specific XMP namespace...
+        if let Some(ref custom) = self.custom_aplib_fields {
+            for (k, v) in custom {
+                let _ = xmp.set_property(crate::xmp::ns::APLIB, k, v, exempi2::PropFlags::NONE);
+            }
+        }
+        true
     }
+}
+
+fn dict_to_btreemap(dict: Option<plist::Dictionary>) -> Option<std::collections::BTreeMap<String, String>> {
+    dict.map(|d| {
+        d.into_iter()
+            .filter_map(|(k, v)| v.as_string().map(|vs| (k, vs.to_string())))
+            .collect()
+    })
 }
 
 #[cfg(test)]

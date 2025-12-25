@@ -64,6 +64,10 @@ pub struct Master {
     pub notes: Option<Vec<NotesProperties>>,
     pub colour_space_definition: Option<Vec<u8>>,
     pub face_detection_state: Option<i64>,
+    pub library_path: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_aplib_fields: Option<std::collections::BTreeMap<String, String>>,
 }
 
 impl PlistLoadable for Master {
@@ -141,6 +145,8 @@ impl PlistLoadable for Master {
                         "faceDetectionState",
                         &mut auditor,
                     ),
+                    library_path: None, // set during XMP export based on file location
+                    custom_aplib_fields: None,
                 });
                 if let Some(auditor) = &mut auditor {
                     auditor.skip("fileAliasData", SkipReason::Ignore);
@@ -320,7 +326,13 @@ impl ToXmp for Master {
             let b64 = base64::encode(colour_space_definition);
             ok &= xmp.set_property(aplib_ns, "ColorSpaceDefinition", &b64, PropFlags::NONE).is_ok();
         }
-
+        // Include other custom values in the APLIB namespace
+        if let Some(ref custom) = self.custom_aplib_fields {
+            for (k, v) in custom {
+                println!("Writing custom XMP property: {} = {}", k, v); // DEBUG
+                let _ = xmp.set_property(crate::xmp::ns::APLIB, k, v, exempi2::PropFlags::NONE);
+            }
+        }
         ok
     }
 }
