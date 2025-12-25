@@ -11,7 +11,7 @@ documentation = "https://docs.rs/aplib-extractor/"
 [dependencies]
 base64 = "0.21"
 chrono = { version = "0.4", features = ["serde"] }
-exempi2 = "0.2.0"
+exempi2 = "0.3"
 itertools = "0.12"
 lazy_static = "1.4.0"
 maplit = "1.0.2"
