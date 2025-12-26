@@ -323,17 +323,18 @@ fn print_keywords(keywords: &[Keyword], indent: &str) {
         if !keyword.is_valid() {
             continue;
         }
-        let name = keyword.name.as_ref().unwrap();
-        let uuid = keyword.uuid().as_ref().unwrap();
+        // Use a &str to avoid needing type inference for the inner Option<T>
+        let name = keyword.name.as_str();
+        let uuid = keyword.uuid().as_ref().map(|s| s.as_str()).unwrap_or("");
         let parent = keyword.parent().clone().unwrap_or_default();
         println!("| {uuid:<26} | {parent:<26} | {indent}{name}");
-        if keyword.children.is_some() {
+        if let Some(children) = keyword.children.as_ref() {
             let new_indent = if indent.is_empty() {
                 String::from("+- ") + indent
             } else {
                 String::from("\t") + indent
             };
-            print_keywords(keyword.children.as_ref().unwrap(), &new_indent);
+            print_keywords(children, &new_indent);
         }
     }
 }

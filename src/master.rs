@@ -68,6 +68,8 @@ pub struct Master {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub custom_aplib_fields: Option<std::collections::BTreeMap<String, String>>,
+
+    pub keywords: Option<Vec<String>>, // <-- Add this field
 }
 
 impl PlistLoadable for Master {
@@ -147,6 +149,10 @@ impl PlistLoadable for Master {
                     ),
                     library_path: None, // set during XMP export based on file location
                     custom_aplib_fields: None,
+                    keywords: audit_get_array_value(dict, "keywords", &mut auditor)
+                        .map(|arr| arr.iter()
+                            .filter_map(|v| v.as_string().map(|s| s.trim().to_string()))
+                            .collect()),
                 });
                 if let Some(auditor) = &mut auditor {
                     auditor.skip("fileAliasData", SkipReason::Ignore);
@@ -332,6 +338,10 @@ impl ToXmp for Master {
                 println!("Writing custom XMP property: {} = {}", k, v); // DEBUG
                 let _ = xmp.set_property(crate::xmp::ns::APLIB, k, v, exempi2::PropFlags::NONE);
             }
+        }
+        // Write keywords into Dublin Core
+        if let Some(ref keywords) = self.keywords {
+            crate::xmp::write_rdf_bag(xmp, crate::xmp::ns::NS_DC, "dc", keywords);
         }
         ok
     }

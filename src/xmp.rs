@@ -101,6 +101,19 @@ pub trait ToXmp {
     fn to_xmp(&self, xmp: &mut Xmp) -> bool;
 }
 
+/// Vector of strings -> rdf:Bag property in XMP
+pub fn write_rdf_bag(xmp: &mut Xmp, namespace: &str, property: &str, values: &[String]) {
+    if values.is_empty() {
+        return;
+    }
+    // Write each value as an array item (rdf:Bag). XMP array indices are 1-based (?!)
+    for (i, v) in values.iter().enumerate() {
+        let index = (i as i32) + 1;
+        xmp.set_array_item(namespace, property, index, v.trim(), exempi2::PropFlags::NONE)
+            .ok();
+    }
+}
+
 #[cfg(test)]
 #[test]
 fn test_xmp() {
