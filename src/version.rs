@@ -64,7 +64,7 @@ pub struct Version {
     pub iptc: Option<IptcProperties>,
     pub exif: Option<ExifProperties>,
     pub custom_info: Option<CustomInfoProperties>,
-    pub keywords: Option<Vec<Value>>,
+    pub keywords: Option<Vec<String>>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub custom_aplib_fields: Option<std::collections::BTreeMap<String, String>>,
@@ -120,7 +120,10 @@ impl PlistLoadable for Version {
                     iptc: IptcProperties::from(&iptc, &mut auditor),
                     exif: ExifProperties::from(&exif, &mut auditor),
                     custom_info: CustomInfoProperties::from(&custom_info, &mut auditor),
-                    keywords: audit_get_array_value(dict, "keywords", &mut auditor),
+                    keywords: audit_get_array_value(dict, "keywords", &mut auditor)
+                        .map(|arr| arr.into_iter()
+                            .filter_map(|v| v.as_string().map(|s| s.trim().to_string()))
+                            .collect()),
                     custom_aplib_fields: dict_to_btreemap(audit_get_dict_value(dict, "customAplibFields", &mut auditor)),
                 });
                 if let Some(auditor) = &mut auditor {
@@ -133,13 +136,11 @@ impl PlistLoadable for Version {
                     auditor.skip("masterWidth", SkipReason::Ignore);
                     auditor.skip("supportedStatus", SkipReason::Ignore);
                     auditor.skip("showInLibrary", SkipReason::Ignore);
-
                     auditor.skip("adjustmentProperties", SkipReason::Ignore); // don't know what to do yet
                     auditor.skip("RKImageAdjustments", SkipReason::Ignore);
                     auditor.skip("hasAdjustments", SkipReason::Ignore);
                     auditor.skip("hasEnabledAdjustments", SkipReason::Ignore);
                     auditor.skip("renderVersion", SkipReason::Ignore);
-
                     auditor.skip("imageProxyState", SkipReason::Ignore);
                     auditor.skip("plistWriteTimestamp", SkipReason::Ignore);
                     auditor.audit_ignored(dict, None);
@@ -188,6 +189,9 @@ impl ToXmp for Version {
             for (k, v) in custom {
                 let _ = xmp.set_property(crate::xmp::ns::APLIB, k, v, exempi2::PropFlags::NONE);
             }
+        }
+        if let Some(ref keywords) = self.keywords {
+            crate::xmp::write_rdf_bag(xmp, crate::xmp::ns::NS_DC, "dc", keywords);
         }
         true
     }

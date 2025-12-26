@@ -19,14 +19,17 @@ use serde::{Serialize, Deserialize};
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Keyword {
     /// The uuid
-    uuid: Option<String>,
+    pub uuid: Option<String>,
+
     /// The numeric id in the model
     model_id: Option<i64>,
+
     /// The parent uuid
     parent_uuid: Option<String>,
 
     /// Name of the keyword
-    pub name: Option<String>,
+    pub name: String,
+
     /// Children keywords.  parent_uuid = self.uuid
     pub children: Option<Vec<Keyword>>,
 }
@@ -97,8 +100,15 @@ impl From<&plist::Dictionary> for Keyword {
             uuid: get_str_value(d, "uuid"),
             model_id: get_int_value(d, "modelId"),
             parent_uuid: get_str_value(d, "parentUuid"),
-            name: get_str_value(d, "name"),
+            name: get_str_value(d, "name").unwrap_or_default(),
             children: Keyword::from_array(get_array_value(d, "zChildren")),
         }
     }
+}
+
+// Helper to resolve a keyword by uuid or name from a slice of keywords.
+pub fn resolve_keyword(keywords: &[Keyword], uuid_or_name: &str) -> Option<String> {
+    keywords.iter()
+        .find(|kw| kw.uuid.as_deref() == Some(uuid_or_name) || kw.name == uuid_or_name)
+        .map(|kw| kw.name.clone())
 }
