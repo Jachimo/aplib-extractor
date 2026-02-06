@@ -35,6 +35,7 @@ fn export_job_files(
     out_dir: &Path,
     cache: &LibraryCache,
     library_root_path: &Path,
+    keyword_map: &std::collections::HashMap<String, String>,
 ) -> std::io::Result<()> {
 
     // Create the output directory
@@ -55,20 +56,33 @@ fn export_job_files(
 
     if let Some(master) = cache.master_map.get(&job.master_uuid) {
         let mut master = master.clone();
+
+        // Resolve keywords from UUIDs to names
+        if let Some(ref raw_keywords) = master.keywords {
+            let resolved: Vec<String> = raw_keywords
+                .iter()
+                .filter_map(|kw| keyword_map.get(kw).cloned())
+                .collect();
+            master.keywords = if resolved.is_empty() { None } else { Some(resolved) };
+        }
+
+        // Populate "ApertureLibraryPath" custom metadata field from actual dir structure
         let mut custom = master.custom_aplib_fields.unwrap_or_default();
         if let Ok(rel_path) = job.master_path.strip_prefix(library_root_path) {
             custom.insert("ApertureLibraryPath".to_string(), rel_path.to_string_lossy().to_string());
         } else {
             custom.insert("ApertureLibraryPath".to_string(), job.master_path.to_string_lossy().to_string());
         }
+
+        // Create XMP elements from metadata fields
         master.custom_aplib_fields = Some(custom);
         master.to_xmp(&mut xmp);
     }
+    // Create and write the sidecar file 
     let mut file = fs::File::create(&master_sidecar)?;
     let xmp_string = xmp.serialize(SerialFlags::default(), 0)
         .unwrap_or_else(|_| exempi2::XmpString::new());
     file.write_all(xmp_string.to_string().as_bytes())?;
-
 
     // Copy versions and write their sidecars
     for ((src, dest_name), version_uuid) in job.version_paths.iter().zip(&job.version_filenames).zip(&job.version_uuids) {
@@ -76,17 +90,25 @@ fn export_job_files(
             eprintln!("Warning: version file {} does not exist, skipping.", src.display());
             continue;
         }
-        // Place version in the same subdirectory as the master
+        // Place version in the same subdirectory as the master (unified output tree)
         let version_out_dir = master_out_dir.clone();
         fs::create_dir_all(&version_out_dir)?;
         let dest = version_out_dir.join(dest_name);
         fs::copy(src, &dest)?;
 
-        // Write version XMP sidecar (same basename, .xmp extension)
+        // Write version XMP sidecar
         let version_sidecar = dest.with_extension("xmp");
         let mut xmp = exempi2::Xmp::new();
         if let Some(version) = cache.version_map.get(version_uuid) {
             let mut version = version.clone();
+            // Resolve keywords from UUIDs to names
+            if let Some(ref raw_keywords) = version.keywords {
+                let resolved: Vec<String> = raw_keywords
+                    .iter()
+                    .filter_map(|kw| keyword_map.get(kw).cloned())
+                    .collect();
+                version.keywords = if resolved.is_empty() { None } else { Some(resolved) };
+            }
             let mut custom = version.custom_aplib_fields.unwrap_or_default();
             if let Ok(rel_path) = src.strip_prefix(library_root_path) {
                 custom.insert("ApertureLibraryPath".to_string(), rel_path.to_string_lossy().to_string());
@@ -95,7 +117,8 @@ fn export_job_files(
             }
             version.custom_aplib_fields = Some(custom);
             version.to_xmp(&mut xmp);
-            // Add master reference
+
+            // Add master reference to version's metadata
             XmpProperty::new(ns::APLIB, "MasterUUID").put_into_xmp(&job.master_uuid, &mut xmp);
             XmpProperty::new(ns::APLIB, "MasterFilename").put_into_xmp(&job.master_filename, &mut xmp);
         }
@@ -160,7 +183,7 @@ pub fn build_export_jobs(
         let master_filename = rel_path.file_name().unwrap().to_string_lossy().to_string();
         let master_rel_dir = rel_path.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
 
-        // Find all versions for this master (existing logic)
+        // Find all versions for this master
         let mut version_uuids = Vec::new();
         let mut version_paths = Vec::new();
         let mut version_filenames = Vec::new();
@@ -207,6 +230,23 @@ pub fn process_export(args: &super::ExportArgs) {
 
     let mut library = Library::new(&args.path);
 
+    let keyword_map: std::collections::HashMap<String, String> = library
+        .list_keywords()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|kw| {
+            if let (Some(uuid), name) = (kw.uuid.as_ref(), &kw.name) {
+                if !uuid.is_empty() && !name.is_empty() {
+                    Some((uuid.clone(), name.clone()))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .collect();
+
     let cache_path = {
         use std::hash::{Hasher, Hash};
         use std::collections::hash_map::DefaultHasher;
@@ -229,10 +269,12 @@ pub fn process_export(args: &super::ExportArgs) {
     let _ = exempi2::register_namespace(ns::APLIB, "aplib");
 
     // Currently we export all masters and versions *that exist in the Versions tree*
-    // Note that "orphaned" masters (without versions) will not be exported!
+    // This means: "orphaned" masters (without versions) will not be exported!
     // TODO: Create an option to either include or at least report a list of "orphans"
+    
     let jobs = build_export_jobs(&library, &cache, &library_abs, out_dir);
     println!("Prepared {} export jobs (one per master).", jobs.len());
+
     for job in &jobs {
         println!(
             "Exporting master {} and {} versions...",
@@ -240,7 +282,7 @@ pub fn process_export(args: &super::ExportArgs) {
             job.version_uuids.len()
         );
         if !args.dryrun {
-            if let Err(e) = export_job_files(job, out_dir, &cache, &library_abs) {
+            if let Err(e) = export_job_files(job, out_dir, &cache, &library_abs, &keyword_map) {
                 eprintln!("Failed to export {}: {}", job.master_uuid, e);
             }
         }

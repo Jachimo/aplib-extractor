@@ -353,15 +353,14 @@ impl Library {
                 if store {
                     self.store(T::wrap(obj));
                 }
-            } else {
-                if audit {
-                    self.auditor
-                        .as_mut()
-                        .unwrap()
-                        .skip(&file.to_string_lossy(), SkipReason::ParseFailed);
-                }
-                println!("Failed to decode object from {file:?}");
             }
+            if audit {
+                self.auditor
+                    .as_mut()
+                    .unwrap()
+                    .skip(&file.to_string_lossy(), SkipReason::ParseFailed);
+            }
+            println!("Failed to decode object from {file:?}");
             if let Some(pg) = pg.as_mut() {
                 if !pg(1) {
                     println!("Cancelled");
@@ -629,21 +628,37 @@ impl Library {
     pub fn list_keywords(&mut self) -> Option<Vec<Keyword>> {
         let audit = self.auditor.is_some();
         let mut report = if audit { Some(Report::new()) } else { None };
-        let result = parse_keywords(self.build_path(KEYWORDS_PLIST, true), &mut report.as_mut());
-        if audit {
-            if result.is_some() {
-                self.auditor
-                    .as_mut()
-                    .unwrap()
-                    .parsed(KEYWORDS_PLIST, report.unwrap());
-            } else {
-                self.auditor
-                    .as_mut()
-                    .unwrap()
-                    .skip(KEYWORDS_PLIST, SkipReason::ParseFailed);
+
+        // Build paths
+        let root_path = self.build_path(KEYWORDS_PLIST, true);
+        let db_label = format!("Database/{}", KEYWORDS_PLIST);
+        let db_path = self.build_path(&db_label, true);
+
+        // Helper closure to handle auditing and parsing
+        let mut try_parse = |path: &Path, label: &str| -> Option<Vec<Keyword>> {
+            let result = parse_keywords(path, &mut report.as_mut());
+            if audit {
+                let auditor = self.auditor.as_mut().unwrap();
+                if result.is_some() {
+                    auditor.parsed(label, report.take().unwrap());
+                } else {
+                    auditor.skip(label, SkipReason::ParseFailed);
+                }
             }
+            result
+        };
+
+        // Look for Keywords.plist in root first
+        if root_path.exists() {
+            return try_parse(&root_path, KEYWORDS_PLIST);
         }
-        result
+
+        // Try the Database/Keywords.plist location
+        if db_path.exists() {
+            return try_parse(&db_path, &db_label);
+        }
+        // TODO: Look elsewhere in Library for Keywords.plist? 
+        None
     }
 
     /// Load and return the ModelInfo for this library.
@@ -683,7 +698,7 @@ impl Library {
         }
     }
 
-    /// Recursively find all .apmaster files in the given versions directory.
+    /// Recursively find all .apmaster files in the versions directory.
     pub fn find_apmaster_files(versions_dir: &Path) -> Vec<PathBuf> {
         let mut result = Vec::new();
         if let Ok(entries) = fs::read_dir(versions_dir) {
@@ -701,76 +716,76 @@ impl Library {
         result
     }
 
-/// Load masters by searching for .apmaster files in the Versions directory.
-pub fn load_masters_from_versions(&mut self) {
-    // Identify Masters directory (Masters or Database/Masters)
-    let masters_dir = match self.find_masters_dir() {
-        Some(dir) => dir,
-        None => {
-            println!("No Masters directory found; cannot load masters.");
+    /// Load masters by searching for .apmaster files
+    pub fn load_masters_from_versions(&mut self) {
+
+        // Identify Masters directory
+        let masters_dir = match self.find_masters_dir() {
+            Some(dir) => dir,
+            None => {
+                println!("No Masters directory found; cannot load masters.");
+                return;
+            }
+        };
+        // Identify Versions directory 
+        let versions_dir = match self.find_versions_dir() {
+            Some(dir) => dir,
+            None => {
+                println!("No Versions directory found; cannot load versions.");
+                return;
+            }
+        };
+        // Recursively find all .apmaster files in Versions directory
+        let apmaster_files = Self::find_apmaster_files(&versions_dir);
+        if apmaster_files.is_empty() {
+            println!("No .apmaster files found in Versions directory.");
             return;
         }
-    };
-    // Identify Versions directory (Database/Versions)
-    let versions_dir = match self.find_versions_dir() {
-        Some(dir) => dir,
-        None => {
-            println!("No Versions directory found; cannot load versions.");
-            return;
-        }
-    };
 
-    // Recursively find all .apmaster files in Versions directory
-    let apmaster_files = Self::find_apmaster_files(&versions_dir);
-    if apmaster_files.is_empty() {
-        println!("No .apmaster files found in Versions directory.");
-        return;
-    }
+        let mut masters: HashSet<String> = HashSet::new();
+        let mut pb = ProgressBar::on(stderr(), apmaster_files.len() as u64);
+        pb.message("Loading masters: ");
+        pb.set_max_refresh_rate(Some(std::time::Duration::from_millis(100)));
 
-    let mut masters: HashSet<String> = HashSet::new();
-    let mut pb = ProgressBar::on(stderr(), apmaster_files.len() as u64);
-    pb.message("Loading masters: ");
-    pb.set_max_refresh_rate(Some(std::time::Duration::from_millis(100)));
-
-    for apmaster_path in apmaster_files {
-        if let Some(master) = Master::from_path(&apmaster_path, None) {
-            if let Some(image_path) = master.image_path.as_ref() {
-                let master_image = masters_dir.join(image_path);
-                if master_image.exists() {
-                    // Use the master UUID if present, else fallback to apmaster path as unique key
-                    let uuid = if let Some(ref u) = master.uuid() {
-                        u.clone()
+        for apmaster_path in apmaster_files {
+            if let Some(master) = Master::from_path(&apmaster_path, None) {
+                if let Some(image_path) = master.image_path.as_ref() {
+                    let master_image = masters_dir.join(image_path);
+                    if master_image.exists() {
+                        // Use the master UUID if present, else fallback to apmaster path as unique key
+                        let uuid = if let Some(ref u) = master.uuid() {
+                            u.clone()
+                        } else {
+                            apmaster_path.to_string_lossy().to_string()
+                        };
+                        // Store in object store and track UUID
+                        if self.store(store::Wrapper::Master(Box::new(master))) {
+                            masters.insert(uuid);
+                        }
                     } else {
-                        apmaster_path.to_string_lossy().to_string()
-                    };
-                    // Store in object store and track UUID
-                    if self.store(store::Wrapper::Master(Box::new(master))) {
-                        masters.insert(uuid);
+                        println!(
+                            "Warning: Master image {} referenced by {} does not exist.",
+                            master_image.display(),
+                            apmaster_path.display()
+                        );
                     }
                 } else {
                     println!(
-                        "Warning: Master image {} referenced by {} does not exist.",
-                        master_image.display(),
+                        "Warning: .apmaster file {} does not contain an imagePath.",
                         apmaster_path.display()
                     );
                 }
             } else {
                 println!(
-                    "Warning: .apmaster file {} does not contain an imagePath.",
+                    "Warning: Failed to parse .apmaster file {}.",
                     apmaster_path.display()
                 );
             }
-        } else {
-            println!(
-                "Warning: Failed to parse .apmaster file {}.",
-                apmaster_path.display()
-            );
+            pb.inc();
         }
-        pb.inc();
-    }
-    pb.finish();
+        pb.finish();
 
-    // Update the masters set for downstream code
-    self.masters = masters;
-}
+        // Update the masters set for downstream code
+        self.masters = masters;
+    }
 }

@@ -190,8 +190,9 @@ impl ToXmp for Version {
                 let _ = xmp.set_property(crate::xmp::ns::APLIB, k, v, exempi2::PropFlags::NONE);
             }
         }
+        // Aperture keyword tags into Dublin Core "subject" (this is common practice for some reason)
         if let Some(ref keywords) = self.keywords {
-            crate::xmp::write_rdf_bag(xmp, crate::xmp::ns::NS_DC, "dc", keywords);
+            crate::xmp::write_rdf_bag(xmp, crate::xmp::ns::NS_DC, "subject", keywords);
         }
         true
     }

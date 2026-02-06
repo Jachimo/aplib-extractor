@@ -341,13 +341,27 @@ impl ToXmp for Master {
         }
         // Write keywords into Dublin Core
         if let Some(ref keywords) = self.keywords {
-            crate::xmp::write_rdf_bag(xmp, crate::xmp::ns::NS_DC, "dc", keywords);
+            crate::xmp::write_rdf_bag(xmp, crate::xmp::ns::NS_DC, "subject", keywords);
         }
         ok
     }
 }
 
 impl Master {}
+
+// Resolve UUIDs in keywords to human-readable names
+fn resolve_keywords(raw_keywords: &[String], keyword_map: &std::collections::HashMap<String, String>) -> Vec<String> {
+    let mut result = Vec::new();
+    for kw in raw_keywords {
+        if let Some(name) = keyword_map.get(kw) {
+            result.push(name.trim().to_string());
+        } else {
+            // If not found, fallback to the original string (could be a direct name?)
+            result.push(kw.trim().to_string());
+        }
+    }
+    result
+}
 
 #[cfg(test)]
 #[test]

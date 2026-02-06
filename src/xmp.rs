@@ -106,7 +106,6 @@ pub fn write_rdf_bag(xmp: &mut Xmp, namespace: &str, property: &str, values: &[S
     if values.is_empty() {
         return;
     }
-    // Write each value as an array item (rdf:Bag). XMP array indices are 1-based (?!)
     for (i, v) in values.iter().enumerate() {
         let index = (i as i32) + 1;
         xmp.set_array_item(namespace, property, index, v.trim(), exempi2::PropFlags::NONE)
@@ -135,3 +134,5 @@ fn test_xmp() {
     assert!(value.is_ok());
     assert_eq!(value.unwrap().to_str(), Ok("Batman"));
 }
+
+
