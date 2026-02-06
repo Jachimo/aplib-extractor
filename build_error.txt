@@ -1,0 +1,83 @@
+# Compile console log
+
+jtuttle@gr8tr:~/src/aplib-extractor$ cargo build
+warning: unused import: `crate::plutils::Value`
+  --> src/version.rs:20:5
+   |
+20 | use crate::plutils::Value;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: use of deprecated function `base64::encode`: Use Engine::encode
+   --> src/master.rs:332:31
+    |
+332 |             let b64 = base64::encode(colour_space_definition);
+    |                               ^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: unused variable: `exif_ns`
+   --> src/master.rs:202:13
+    |
+202 |         let exif_ns = "http://ns.adobe.com/exif/1.0/";
+    |             ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_exif_ns`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable `ok` is assigned to, but never used
+   --> src/version.rs:178:13
+    |
+178 |         let mut ok = true;
+    |             ^^^^^^
+    |
+    = note: consider using `_ok` instead
+
+warning: value assigned to `ok` is never read
+   --> src/version.rs:181:13
+    |
+181 |             ok &= xmp.set_property("http://ns.adobe.com/xap/1.0/", "VersionUUID", uuid, PropFlags::NONE).is_ok();
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `ok` is never read
+   --> src/version.rs:185:13
+    |
+185 | ...   ok &= xmp.set_property("http://ns.adobe.com/xap/1.0/", "VersionFileName", file_name, PropFlags::NONE).is_ok();
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: function `resolve_keyword` is never used
+   --> src/keyword.rs:110:8
+    |
+110 | pub fn resolve_keyword(keywords: &[Keyword], uuid_or_name: &str) -> Option<String> {
+    |        ^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `resolve_keywords` is never used
+   --> src/master.rs:353:4
+    |
+353 | fn resolve_keywords(raw_keywords: &[String], keyword_map: &std::collections::HashMap<String, String>) -> Vec<Strin...
+    |    ^^^^^^^^^^^^^^^^
+
+warning: `aplib-extractor` (lib) generated 8 warnings (run `cargo fix --lib -p aplib-extractor` to apply 2 suggestions)
+warning: unused variable: `library`
+   --> src/bin/dumper/exporter.rs:160:5
+    |
+160 |     library: &Library,
+    |     ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_library`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `out_dir`
+   --> src/bin/dumper/exporter.rs:163:5
+    |
+163 |     out_dir: &Path,
+    |     ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_out_dir`
+
+warning: `aplib-extractor` (bin "dumper") generated 2 warnings (run `cargo fix --bin "dumper" -p aplib-extractor` to apply 2 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s

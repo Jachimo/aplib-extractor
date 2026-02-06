@@ -12,7 +12,8 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 use serde::{Serialize, Deserialize};
 use exempi2::{Xmp, PropFlags};
-use base64;
+use base64::alphabet;
+use base64::Engine;
 
 use crate::audit::{
     audit_get_array_value, audit_get_bool_value, audit_get_data_value, audit_get_date_value,
@@ -329,7 +330,8 @@ impl ToXmp for Master {
         }
         // Colour Space Definition (as base64, if present)
         if let Some(ref colour_space_definition) = self.colour_space_definition {
-            let b64 = base64::encode(colour_space_definition);
+            let engine = base64::engine::GeneralPurpose::new(&alphabet::STANDARD, base64::engine::general_purpose::PAD);
+            let b64 = engine.encode(colour_space_definition);
             ok &= xmp.set_property(aplib_ns, "ColorSpaceDefinition", &b64, PropFlags::NONE).is_ok();
         }
         // Include other custom values in the APLIB namespace

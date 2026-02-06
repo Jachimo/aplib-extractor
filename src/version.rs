@@ -17,7 +17,6 @@ use crate::audit::{
 use crate::custominfo::CustomInfoProperties;
 use crate::exif::ExifProperties;
 use crate::iptc::IptcProperties;
-use crate::plutils::Value;
 use crate::store;
 use crate::AplibObject;
 use crate::AplibType;

@@ -161,10 +161,8 @@ pub fn get_version_image_path(library_path: &str, version_uuid: &str, file_name:
 
 /// Build a list of export jobs for all masters and their versions
 pub fn build_export_jobs(
-    library: &Library,
     cache: &LibraryCache,
     library_abs: &Path,
-    out_dir: &Path,
 ) -> Vec<ExportJob> {
     let mut jobs = Vec::new();
     let master_root = get_master_root(library_abs);
@@ -275,8 +273,8 @@ pub fn process_export(args: &super::ExportArgs) {
     // Currently we export all masters and versions *that exist in the Versions tree*
     // This means: "orphaned" masters (without versions) will not be exported!
     // TODO: Create an option to either include or at least report a list of "orphans"
-    
-    let jobs = build_export_jobs(&library, &cache, &library_abs, out_dir);
+
+    let jobs = build_export_jobs(&cache, &library_abs);
     println!("Prepared {} export jobs (one per master).", jobs.len());
 
     for job in &jobs {

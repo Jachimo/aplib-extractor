@@ -33,7 +33,6 @@ use audit::Report;
 pub use audit::SkipReason;
 pub use folder::Folder;
 pub use folder::Type;
-pub use folder::Type as FolderType;  // shouldn't really need this
 pub use keyword::Keyword;
 pub use library::{Library, ModelInfo, PROGRESS_NONE};
 pub use master::Master;
