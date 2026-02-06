@@ -178,23 +178,34 @@ impl ToXmp for Version {
         let mut ok = true;
         // VersionUUID
         if let Some(ref uuid) = self.uuid {
-            ok &= xmp.set_property("http://ns.adobe.com/xap/1.0/", "VersionUUID", uuid, PropFlags::NONE).is_ok();
+            if xmp.set_property("http://ns.adobe.com/xap/1.0/", "VersionUUID", uuid, PropFlags::NONE).is_err() {
+                eprintln!("Warning: Failed to write XMP property VersionUUID for Version {}", uuid);
+                ok = false;
+            }
         }
         // VersionFileName
         if let Some(ref file_name) = self.file_name {
-            ok &= xmp.set_property("http://ns.adobe.com/xap/1.0/", "VersionFileName", file_name, PropFlags::NONE).is_ok();
+            if xmp.set_property("http://ns.adobe.com/xap/1.0/", "VersionFileName", file_name, PropFlags::NONE).is_err() {
+                let uuid_str = self.uuid.as_deref().unwrap_or("unknown");
+                eprintln!("Warning: Failed to write XMP property VersionFileName for Version {}", uuid_str);
+                ok = false;
+            }
         }
         // Other custom fields in app-specific XMP namespace...
         if let Some(ref custom) = self.custom_aplib_fields {
             for (k, v) in custom {
-                let _ = xmp.set_property(crate::xmp::ns::APLIB, k, v, exempi2::PropFlags::NONE);
+                if xmp.set_property(crate::xmp::ns::APLIB, k, v, exempi2::PropFlags::NONE).is_err() {
+                    let uuid_str = self.uuid.as_deref().unwrap_or("unknown");
+                    eprintln!("Warning: Failed to write custom XMP field '{}' for Version {}", k, uuid_str);
+                    ok = false;
+                }
             }
         }
         // Aperture keyword tags into Dublin Core "subject" (this is common practice for some reason)
         if let Some(ref keywords) = self.keywords {
             crate::xmp::write_rdf_bag(xmp, crate::xmp::ns::NS_DC, "subject", keywords);
         }
-        true
+        ok
     }
 }
 

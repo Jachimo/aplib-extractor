@@ -76,7 +76,9 @@ fn export_job_files(
 
         // Create XMP elements from metadata fields
         master.custom_aplib_fields = Some(custom);
-        master.to_xmp(&mut xmp);
+        if !master.to_xmp(&mut xmp) {
+            eprintln!("Warning: XMP metadata incomplete for master {}", job.master_uuid);
+        }
     }
     // Create and write the sidecar file 
     let mut file = fs::File::create(&master_sidecar)?;
@@ -116,7 +118,9 @@ fn export_job_files(
                 custom.insert("ApertureLibraryPath".to_string(), src.to_string_lossy().to_string());
             }
             version.custom_aplib_fields = Some(custom);
-            version.to_xmp(&mut xmp);
+            if !version.to_xmp(&mut xmp) {
+                eprintln!("Warning: XMP metadata incomplete for version {}", version_uuid);
+            }
 
             // Add master reference to version's metadata
             XmpProperty::new(ns::APLIB, "MasterUUID").put_into_xmp(&job.master_uuid, &mut xmp);
