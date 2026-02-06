@@ -200,10 +200,27 @@ impl ToXmp for Version {
                 }
             }
         }
-        // Aperture keyword tags into Dublin Core "subject" (this is common practice for some reason)
+        // Write keywords into Dublin Core (flat, for compatibility)
         if let Some(ref keywords) = self.keywords {
             crate::xmp::write_rdf_bag(xmp, crate::xmp::ns::NS_DC, "subject", keywords);
         }
+
+        // Write hierarchical keywords into digiKam TagsList (ordered, with full paths)
+        if let Some(ref custom) = self.custom_aplib_fields {
+            if let Some(hierarchical_json) = custom.get("_resolved_hierarchical_keywords") {
+                if let Ok(hierarchical_keywords) =
+                    serde_json::from_str::<Vec<String>>(hierarchical_json)
+                {
+                    crate::xmp::write_rdf_seq(
+                        xmp,
+                        crate::xmp::ns::NS_DIGIKAM,
+                        "TagsList",
+                        &hierarchical_keywords,
+                    );
+                }
+            }
+        }
+
         ok
     }
 }

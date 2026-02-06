@@ -112,3 +112,73 @@ pub fn resolve_keyword(keywords: &[Keyword], uuid_or_name: &str) -> Option<Strin
         .find(|kw| kw.uuid.as_deref() == Some(uuid_or_name) || kw.name == uuid_or_name)
         .map(|kw| kw.name.clone())
 }
+
+/// Build hierarchical keyword maps from a flat keyword list.
+///
+/// Returns two maps:
+/// - `flat_map`: UUID → simple name (e.g., "France")
+/// - `hierarchical_map`: UUID → full path (e.g., "Location/Europe/France")
+pub fn build_keyword_maps(
+    keywords: &[Keyword],
+) -> (
+    std::collections::HashMap<String, String>,
+    std::collections::HashMap<String, String>,
+) {
+    let mut flat_map = std::collections::HashMap::new();
+    let mut hierarchical_map = std::collections::HashMap::new();
+
+    fn traverse(
+        keyword: &Keyword,
+        parent_path: String,
+        flat_map: &mut std::collections::HashMap<String, String>,
+        hierarchical_map: &mut std::collections::HashMap<String, String>,
+    ) {
+        if let Some(ref uuid) = keyword.uuid {
+            // Add to flat map
+            flat_map.insert(uuid.clone(), keyword.name.clone());
+
+            // Build hierarchical path
+            let current_path = if parent_path.is_empty() {
+                keyword.name.clone()
+            } else {
+                format!("{}/{}", parent_path, keyword.name)
+            };
+
+            // Add to hierarchical map
+            hierarchical_map.insert(uuid.clone(), current_path.clone());
+
+            // Recurse into children
+            if let Some(ref children) = keyword.children {
+                for child in children {
+                    traverse(child, current_path.clone(), flat_map, hierarchical_map);
+                }
+            }
+        }
+    }
+
+    for keyword in keywords {
+        traverse(keyword, String::new(), &mut flat_map, &mut hierarchical_map);
+    }
+
+    (flat_map, hierarchical_map)
+}
+
+/// Resolve a list of keyword UUIDs to names using the provided map.
+///
+/// Prints a warning to stderr for any UUIDs that cannot be resolved.
+/// Returns a vector of resolved names (unresolved UUIDs are skipped).
+pub fn resolve_keyword_uuids(
+    uuids: &[String],
+    keyword_map: &std::collections::HashMap<String, String>,
+    context: &str,
+) -> Vec<String> {
+    let mut result = Vec::new();
+    for uuid in uuids {
+        if let Some(name) = keyword_map.get(uuid) {
+            result.push(name.clone());
+        } else {
+            eprintln!("Warning: Could not resolve keyword UUID '{}' for {}", uuid, context);
+        }
+    }
+    result
+}

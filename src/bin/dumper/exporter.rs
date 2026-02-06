@@ -35,7 +35,8 @@ fn export_job_files(
     out_dir: &Path,
     cache: &LibraryCache,
     library_root_path: &Path,
-    keyword_map: &std::collections::HashMap<String, String>,
+    flat_keyword_map: &std::collections::HashMap<String, String>,
+    hierarchical_keyword_map: &std::collections::HashMap<String, String>,
 ) -> std::io::Result<()> {
 
     // Create the output directory
@@ -59,11 +60,27 @@ fn export_job_files(
 
         // Resolve keywords from UUIDs to names
         if let Some(ref raw_keywords) = master.keywords {
-            let resolved: Vec<String> = raw_keywords
-                .iter()
-                .filter_map(|kw| keyword_map.get(kw).cloned())
-                .collect();
-            master.keywords = if resolved.is_empty() { None } else { Some(resolved) };
+            let flat_resolved = aplib::keyword::resolve_keyword_uuids(
+                raw_keywords,
+                flat_keyword_map,
+                &format!("Master {}", job.master_uuid),
+            );
+            let hierarchical_resolved = aplib::keyword::resolve_keyword_uuids(
+                raw_keywords,
+                hierarchical_keyword_map,
+                &format!("Master {}", job.master_uuid),
+            );
+            master.keywords = if flat_resolved.is_empty() { None } else { Some(flat_resolved) };
+
+            // Store hierarchical keywords in custom fields for XMP writing
+            if !hierarchical_resolved.is_empty() {
+                let mut custom = master.custom_aplib_fields.unwrap_or_default();
+                custom.insert(
+                    "_resolved_hierarchical_keywords".to_string(),
+                    serde_json::to_string(&hierarchical_resolved).unwrap_or_default(),
+                );
+                master.custom_aplib_fields = Some(custom);
+            }
         }
 
         // Populate "ApertureLibraryPath" custom metadata field from actual dir structure
@@ -105,11 +122,27 @@ fn export_job_files(
             let mut version = version.clone();
             // Resolve keywords from UUIDs to names
             if let Some(ref raw_keywords) = version.keywords {
-                let resolved: Vec<String> = raw_keywords
-                    .iter()
-                    .filter_map(|kw| keyword_map.get(kw).cloned())
-                    .collect();
-                version.keywords = if resolved.is_empty() { None } else { Some(resolved) };
+                let flat_resolved = aplib::keyword::resolve_keyword_uuids(
+                    raw_keywords,
+                    flat_keyword_map,
+                    &format!("Version {}", version_uuid),
+                );
+                let hierarchical_resolved = aplib::keyword::resolve_keyword_uuids(
+                    raw_keywords,
+                    hierarchical_keyword_map,
+                    &format!("Version {}", version_uuid),
+                );
+                version.keywords = if flat_resolved.is_empty() { None } else { Some(flat_resolved) };
+
+                // Store hierarchical keywords in custom fields for XMP writing
+                if !hierarchical_resolved.is_empty() {
+                    let mut custom = version.custom_aplib_fields.unwrap_or_default();
+                    custom.insert(
+                        "_resolved_hierarchical_keywords".to_string(),
+                        serde_json::to_string(&hierarchical_resolved).unwrap_or_default(),
+                    );
+                    version.custom_aplib_fields = Some(custom);
+                }
             }
             let mut custom = version.custom_aplib_fields.unwrap_or_default();
             if let Ok(rel_path) = src.strip_prefix(library_root_path) {
@@ -232,22 +265,15 @@ pub fn process_export(args: &super::ExportArgs) {
 
     let mut library = Library::new(&args.path);
 
-    let keyword_map: std::collections::HashMap<String, String> = library
-        .list_keywords()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|kw| {
-            if let (Some(uuid), name) = (kw.uuid.as_ref(), &kw.name) {
-                if !uuid.is_empty() && !name.is_empty() {
-                    Some((uuid.clone(), name.clone()))
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .collect();
+    let keywords = library.list_keywords().unwrap_or_default();
+    let (flat_keyword_map, hierarchical_keyword_map) =
+        aplib::keyword::build_keyword_maps(&keywords);
+    eprintln!(
+        "Loaded {} keywords ({} flat mappings, {} hierarchical mappings)",
+        keywords.len(),
+        flat_keyword_map.len(),
+        hierarchical_keyword_map.len()
+    );
 
     let cache_path = {
         use std::hash::{Hasher, Hash};
@@ -267,8 +293,9 @@ pub fn process_export(args: &super::ExportArgs) {
         fs::create_dir_all(out_dir).expect("Failed to create output directory");
     }
 
-    // Create a custom namespace for non-standard XMP fields
+    // Create custom namespaces for non-standard XMP fields
     let _ = exempi2::register_namespace(ns::APLIB, "aplib");
+    let _ = exempi2::register_namespace(ns::NS_DIGIKAM, "digiKam");
 
     // Currently we export all masters and versions *that exist in the Versions tree*
     // This means: "orphaned" masters (without versions) will not be exported!
@@ -284,7 +311,14 @@ pub fn process_export(args: &super::ExportArgs) {
             job.version_uuids.len()
         );
         if !args.dryrun {
-            if let Err(e) = export_job_files(job, out_dir, &cache, &library_abs, &keyword_map) {
+            if let Err(e) = export_job_files(
+                job,
+                out_dir,
+                &cache,
+                &library_abs,
+                &flat_keyword_map,
+                &hierarchical_keyword_map,
+            ) {
                 eprintln!("Failed to export {}: {}", job.master_uuid, e);
             }
         }

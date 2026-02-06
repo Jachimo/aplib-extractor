@@ -12,7 +12,7 @@ mod custominfo;
 mod exif;
 mod folder;
 mod iptc;
-mod keyword;
+pub mod keyword;
 mod library;
 mod master;
 mod notes;

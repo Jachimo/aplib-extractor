@@ -341,29 +341,32 @@ impl ToXmp for Master {
                 let _ = xmp.set_property(crate::xmp::ns::APLIB, k, v, exempi2::PropFlags::NONE);
             }
         }
-        // Write keywords into Dublin Core
+        // Write keywords into Dublin Core (flat, for compatibility)
         if let Some(ref keywords) = self.keywords {
             crate::xmp::write_rdf_bag(xmp, crate::xmp::ns::NS_DC, "subject", keywords);
         }
+
+        // Write hierarchical keywords into digiKam TagsList (ordered, with full paths)
+        if let Some(ref custom) = self.custom_aplib_fields {
+            if let Some(hierarchical_json) = custom.get("_resolved_hierarchical_keywords") {
+                if let Ok(hierarchical_keywords) =
+                    serde_json::from_str::<Vec<String>>(hierarchical_json)
+                {
+                    crate::xmp::write_rdf_seq(
+                        xmp,
+                        crate::xmp::ns::NS_DIGIKAM,
+                        "TagsList",
+                        &hierarchical_keywords,
+                    );
+                }
+            }
+        }
+
         ok
     }
 }
 
 impl Master {}
-
-// Resolve UUIDs in keywords to human-readable names
-fn resolve_keywords(raw_keywords: &[String], keyword_map: &std::collections::HashMap<String, String>) -> Vec<String> {
-    let mut result = Vec::new();
-    for kw in raw_keywords {
-        if let Some(name) = keyword_map.get(kw) {
-            result.push(name.trim().to_string());
-        } else {
-            // If not found, fallback to the original string (could be a direct name?)
-            result.push(kw.trim().to_string());
-        }
-    }
-    result
-}
 
 #[cfg(test)]
 #[test]

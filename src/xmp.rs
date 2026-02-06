@@ -19,6 +19,7 @@ pub mod ns {
     pub const NS_EXIF_AUX: &str = "http://ns.adobe.com/exif/1.0/aux/";
     pub const NS_TIFF: &str = "http://ns.adobe.com/tiff/1.0/";
     pub const APLIB: &str = "http://github.com/Jachimo/aplib-extractor/aplib/1.0/";
+    pub const NS_DIGIKAM: &str = "http://www.digikam.org/ns/1.0/";
 }
 
 #[derive(Clone, Debug)]
@@ -110,6 +111,24 @@ pub fn write_rdf_bag(xmp: &mut Xmp, namespace: &str, property: &str, values: &[S
         let index = (i as i32) + 1;
         xmp.set_array_item(namespace, property, index, v.trim(), exempi2::PropFlags::NONE)
             .ok();
+    }
+}
+
+/// Vector of strings -> rdf:Seq property in XMP (ordered array)
+pub fn write_rdf_seq(xmp: &mut Xmp, namespace: &str, property: &str, values: &[String]) {
+    if values.is_empty() {
+        return;
+    }
+    for (i, v) in values.iter().enumerate() {
+        let index = (i as i32) + 1;
+        xmp.set_array_item(
+            namespace,
+            property,
+            index,
+            v.trim(),
+            exempi2::PropFlags::ARRAY_IS_ORDERED,
+        )
+        .ok();
     }
 }
 
