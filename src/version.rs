@@ -184,7 +184,8 @@ impl ToXmp for Version {
         }
         // VersionFileName
         if let Some(ref file_name) = self.file_name {
-            if xmp.set_property("http://ns.adobe.com/xap/1.0/", "VersionFileName", file_name, PropFlags::NONE).is_err() {
+            let clean = crate::xmp::sanitize_for_xmp(file_name);
+            if xmp.set_property("http://ns.adobe.com/xap/1.0/", "VersionFileName", &clean, PropFlags::NONE).is_err() {
                 let uuid_str = self.uuid.as_deref().unwrap_or("unknown");
                 eprintln!("Warning: Failed to write XMP property VersionFileName for Version {}", uuid_str);
                 ok = false;
@@ -193,7 +194,8 @@ impl ToXmp for Version {
         // Other custom fields in app-specific XMP namespace...
         if let Some(ref custom) = self.custom_aplib_fields {
             for (k, v) in custom {
-                if xmp.set_property(crate::xmp::ns::APLIB, k, v, exempi2::PropFlags::NONE).is_err() {
+                let clean_v = crate::xmp::sanitize_for_xmp(v);
+                if xmp.set_property(crate::xmp::ns::APLIB, k, &clean_v, exempi2::PropFlags::NONE).is_err() {
                     let uuid_str = self.uuid.as_deref().unwrap_or("unknown");
                     eprintln!("Warning: Failed to write custom XMP field '{}' for Version {}", k, uuid_str);
                     ok = false;

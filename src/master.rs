@@ -217,7 +217,8 @@ impl ToXmp for Master {
         }
         // Alternate Master
         if let Some(ref alternate_master) = self.alternate_master {
-            ok &= xmp.set_property(aplib_ns, "AlternateMaster", alternate_master, PropFlags::NONE).is_ok();
+            let clean = crate::xmp::sanitize_for_xmp(alternate_master);
+            ok &= xmp.set_property(aplib_ns, "AlternateMaster", &clean, PropFlags::NONE).is_ok();
         }
         // Original Version UUID
         if let Some(ref original_version_uuid) = self.original_version_uuid {
@@ -229,15 +230,18 @@ impl ToXmp for Master {
         }
         // Filename
         if let Some(ref filename) = self.filename {
-            ok &= xmp.set_property(tiff_ns, "FileName", filename, PropFlags::NONE).is_ok();
+            let clean = crate::xmp::sanitize_for_xmp(filename);
+            ok &= xmp.set_property(tiff_ns, "FileName", &clean, PropFlags::NONE).is_ok();
         }
         // Name
         if let Some(ref name) = self.name {
-            ok &= xmp.set_property(xmp_ns, "Title", name, PropFlags::NONE).is_ok();
+            let clean = crate::xmp::sanitize_for_xmp(name);
+            ok &= xmp.set_property(xmp_ns, "Title", &clean, PropFlags::NONE).is_ok();
         }
         // Original Version Name
         if let Some(ref original_version_name) = self.original_version_name {
-            ok &= xmp.set_property(aplib_ns, "OriginalVersionName", original_version_name, PropFlags::NONE).is_ok();
+            let clean = crate::xmp::sanitize_for_xmp(original_version_name);
+            ok &= xmp.set_property(aplib_ns, "OriginalVersionName", &clean, PropFlags::NONE).is_ok();
         }
         // DB Version
         if let Some(db_version) = self.db_version {
@@ -245,15 +249,18 @@ impl ToXmp for Master {
         }
         // Master Type
         if let Some(ref master_type) = self.master_type {
-            ok &= xmp.set_property(aplib_ns, "Type", master_type, PropFlags::NONE).is_ok();
+            let clean = crate::xmp::sanitize_for_xmp(master_type);
+            ok &= xmp.set_property(aplib_ns, "Type", &clean, PropFlags::NONE).is_ok();
         }
         // Subtype
         if let Some(ref subtype) = self.subtype {
-            ok &= xmp.set_property(aplib_ns, "Subtype", subtype, PropFlags::NONE).is_ok();
+            let clean = crate::xmp::sanitize_for_xmp(subtype);
+            ok &= xmp.set_property(aplib_ns, "Subtype", &clean, PropFlags::NONE).is_ok();
         }
         // Image Path
         if let Some(ref image_path) = self.image_path {
-            ok &= xmp.set_property(aplib_ns, "ImagePath", image_path, PropFlags::NONE).is_ok();
+            let clean = crate::xmp::sanitize_for_xmp(image_path);
+            ok &= xmp.set_property(aplib_ns, "ImagePath", &clean, PropFlags::NONE).is_ok();
         }
         // Is Reference
         if let Some(is_reference) = self.is_reference {
@@ -293,7 +300,8 @@ impl ToXmp for Master {
         }
         // Original File Name
         if let Some(ref original_file_name) = self.original_file_name {
-            ok &= xmp.set_property(tiff_ns, "OriginalFileName", original_file_name, PropFlags::NONE).is_ok();
+            let clean = crate::xmp::sanitize_for_xmp(original_file_name);
+            ok &= xmp.set_property(tiff_ns, "OriginalFileName", &clean, PropFlags::NONE).is_ok();
         }
         // File Size
         if let Some(file_size) = self.file_size {
@@ -305,7 +313,8 @@ impl ToXmp for Master {
         }
         // Color Space Name
         if let Some(ref color_space_name) = self.color_space_name {
-            ok &= xmp.set_property(aplib_ns, "ColorSpaceName", color_space_name, PropFlags::NONE).is_ok();
+            let clean = crate::xmp::sanitize_for_xmp(color_space_name);
+            ok &= xmp.set_property(aplib_ns, "ColorSpaceName", &clean, PropFlags::NONE).is_ok();
         }
         // Pixel Format
         if let Some(pixel_format) = self.pixel_format {
@@ -326,7 +335,8 @@ impl ToXmp for Master {
         // Notes (as a string, if present)
         if let Some(ref notes) = self.notes {
             let notes_str = format!("{:?}", notes);
-            ok &= xmp.set_property(aplib_ns, "Notes", &notes_str, PropFlags::NONE).is_ok();
+            let clean = crate::xmp::sanitize_for_xmp(&notes_str);
+            ok &= xmp.set_property(aplib_ns, "Notes", &clean, PropFlags::NONE).is_ok();
         }
         // Colour Space Definition (as base64, if present)
         if let Some(ref colour_space_definition) = self.colour_space_definition {
@@ -337,8 +347,15 @@ impl ToXmp for Master {
         // Include other custom values in the APLIB namespace
         if let Some(ref custom) = self.custom_aplib_fields {
             for (k, v) in custom {
-                println!("Writing custom XMP property: {} = {}", k, v); // DEBUG
-                let _ = xmp.set_property(crate::xmp::ns::APLIB, k, v, exempi2::PropFlags::NONE);
+                // Skip the special hierarchical keywords field - it's handled separately below
+                if k == "_resolved_hierarchical_keywords" {
+                    continue;
+                }
+                let clean_v = crate::xmp::sanitize_for_xmp(v);
+                if let Err(e) = xmp.set_property(crate::xmp::ns::APLIB, k, &clean_v, exempi2::PropFlags::NONE) {
+                    eprintln!("Warning: Failed to write custom XMP field '{}': {:?}", k, e);
+                    ok = false;
+                }
             }
         }
         // Write keywords into Dublin Core (flat, for compatibility)

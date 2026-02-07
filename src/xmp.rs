@@ -58,9 +58,10 @@ impl XmpProperty {
 
     /// Put the property `value` into the XMP meta.
     pub fn put_into_xmp(&self, value: &str, xmp: &mut Xmp) -> bool {
+        let clean_value = sanitize_for_xmp(value);
         if self.index.is_none() && self.field.is_none() {
             return xmp
-                .set_property(self.ns, self.property, value, exempi2::PropFlags::NONE)
+                .set_property(self.ns, self.property, &clean_value, exempi2::PropFlags::NONE)
                 .is_ok();
         } else if let Some(ref field) = self.field {
             // XXX when there is the API in exempi, use it.
@@ -68,7 +69,7 @@ impl XmpProperty {
             if let Ok(prefix) = exempi2::namespace_prefix(field.ns) {
                 let property = format!("{}/{}{}", self.property, prefix, field.property);
                 return xmp
-                    .set_property(self.ns, &property, value, exempi2::PropFlags::NONE)
+                    .set_property(self.ns, &property, &clean_value, exempi2::PropFlags::NONE)
                     .is_ok();
             }
         } else if let Some(index) = self.index {
@@ -77,7 +78,7 @@ impl XmpProperty {
                     self.ns,
                     self.property,
                     index,
-                    value,
+                    &clean_value,
                     exempi2::PropFlags::NONE,
                 )
                 .is_ok();
@@ -102,6 +103,24 @@ pub trait ToXmp {
     fn to_xmp(&self, xmp: &mut Xmp) -> bool;
 }
 
+/// Sanitize a string for safe use in XMP by removing NUL bytes and illegal XML characters
+pub fn sanitize_for_xmp(value: &str) -> String {
+    value
+        .chars()
+        .filter(|c| {
+            // Remove NUL bytes
+            if *c == '\0' {
+                return false;
+            }
+            // Remove other illegal XML characters (control characters except whitespace)
+            match *c {
+                '\x01'..='\x08' | '\x0B'..='\x0C' | '\x0E'..='\x1F' | '\x7F' => false,
+                _ => true,
+            }
+        })
+        .collect()
+}
+
 /// Vector of strings -> rdf:Bag property in XMP
 pub fn write_rdf_bag(xmp: &mut Xmp, namespace: &str, property: &str, values: &[String]) {
     if values.is_empty() {
@@ -109,49 +128,91 @@ pub fn write_rdf_bag(xmp: &mut Xmp, namespace: &str, property: &str, values: &[S
     }
     for (i, v) in values.iter().enumerate() {
         let index = (i as i32) + 1;
-        xmp.set_array_item(namespace, property, index, v.trim(), exempi2::PropFlags::NONE)
-            .ok();
+        let clean = sanitize_for_xmp(v);
+        let result = xmp.set_array_item(namespace, property, index, &clean, exempi2::PropFlags::NONE);
+        if let Err(e) = result {
+            eprintln!(
+                "Warning: Failed to set XMP array item '{}:{}[{}]': {:?}",
+                namespace, property, index, e
+            );
+        }
     }
 }
 
-/// Vector of strings -> rdf:Seq property in XMP (ordered array)
+/// Vector of strings -> rdf:Seq property in XMP
 pub fn write_rdf_seq(xmp: &mut Xmp, namespace: &str, property: &str, values: &[String]) {
     if values.is_empty() {
         return;
     }
     for (i, v) in values.iter().enumerate() {
         let index = (i as i32) + 1;
-        xmp.set_array_item(
-            namespace,
-            property,
-            index,
-            v.trim(),
-            exempi2::PropFlags::ARRAY_IS_ORDERED,
-        )
-        .ok();
+        let clean = sanitize_for_xmp(v);
+        let result = xmp.set_array_item(namespace, property, index, &clean, exempi2::PropFlags::NONE);
+        if let Err(e) = result {
+            eprintln!(
+                "Warning: Failed to set XMP array item '{}:{}[{}]': {:?}",
+                namespace, property, index, e
+            );
+        }
     }
 }
 
 #[cfg(test)]
-#[test]
-fn test_xmp() {
-    use exempi2::Xmp;
+mod tests {
+    use super::*;
 
-    let mut xmp = Xmp::new();
+    #[test]
+    fn test_sanitize_for_xmp() {
+        // Test null byte removal
+        assert_eq!(sanitize_for_xmp("sRGB IEC61966-2.1\0"), "sRGB IEC61966-2.1");
+        
+        // Test embedded null bytes
+        assert_eq!(sanitize_for_xmp("hello\0world"), "helloworld");
+        
+        // Test control characters (except whitespace)
+        assert_eq!(sanitize_for_xmp("test\x01\x02\x03"), "test");
+        
+        // Test that normal whitespace is preserved
+        assert_eq!(sanitize_for_xmp("hello world\n\t"), "hello world\n\t");
+        
+        // Test empty string
+        assert_eq!(sanitize_for_xmp(""), "");
+        
+        // Test string with only null bytes
+        assert_eq!(sanitize_for_xmp("\0\0\0"), "");
+    }
 
-    let prop1 = XmpProperty::new(ns::NS_DC, "creator");
-    let prop2 = XmpProperty::new_field(
-        ns::NS_IPTC4XMP,
-        "CreatorContactInfo",
-        XmpProperty::new(ns::NS_IPTC4XMP, "CiAdrCity"),
-    );
-    assert!(prop1.put_into_xmp("Batman", &mut xmp));
-    assert!(prop2.put_into_xmp("Gotham", &mut xmp));
+    #[test]
+    fn test_xmp() {
+        let mut xmp = Xmp::new();
 
-    let mut options: exempi2::PropFlags = exempi2::PropFlags::NONE;
-    let value = xmp.get_property(prop1.ns, prop1.property, &mut options);
-    assert!(value.is_ok());
-    assert_eq!(value.unwrap().to_str(), Ok("Batman"));
+        let prop1 = XmpProperty::new(ns::NS_DC, "creator");
+        let prop2 = XmpProperty::new_field(
+            ns::NS_IPTC4XMP,
+            "CreatorContactInfo",
+            XmpProperty::new(ns::NS_IPTC4XMP, "CiAdrCity"),
+        );
+        assert!(prop1.put_into_xmp("Batman", &mut xmp));
+        assert!(prop2.put_into_xmp("Gotham", &mut xmp));
+
+        let mut options: exempi2::PropFlags = exempi2::PropFlags::NONE;
+        let value = xmp.get_property(prop1.ns, prop1.property, &mut options);
+        assert!(value.is_ok());
+        assert_eq!(value.unwrap().to_str(), Ok("Batman"));
+    }
+    
+    #[test]
+    fn test_xmp_with_null_bytes() {
+        let mut xmp = Xmp::new();
+        let prop = XmpProperty::new(ns::NS_DC, "description");
+        
+        // This should not panic - null bytes should be removed
+        assert!(prop.put_into_xmp("sRGB IEC61966-2.1\0", &mut xmp));
+        
+        let mut options: exempi2::PropFlags = exempi2::PropFlags::NONE;
+        let value = xmp.get_property(prop.ns, prop.property, &mut options);
+        assert!(value.is_ok());
+        assert_eq!(value.unwrap().to_str(), Ok("sRGB IEC61966-2.1"));
+    }
 }
-
 
