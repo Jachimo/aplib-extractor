@@ -192,7 +192,7 @@ fn test_album_parse() {
     use crate::testutils;
 
     let album = Album::from_path(
-        testutils::get_test_file_path("gOnttfpzQoOxcwLpFS9DQg.apalbum").as_path(),
+        testutils::get_test_file_path("Database/Albums/gOnttfpzQoOxcwLpFS9DQg.apalbum").as_path(),
         None,
     );
     assert!(album.is_some());
@@ -220,7 +220,7 @@ fn test_album_content_parse() {
     use crate::testutils;
 
     let album = Album::from_path(
-        testutils::get_test_file_path("x6yNun58SB2sImfCarTJHA.apalbum").as_path(),
+        testutils::get_test_file_path("Database/Albums/x6yNun58SB2sImfCarTJHA.apalbum").as_path(),
         None,
     );
     assert!(album.is_some());

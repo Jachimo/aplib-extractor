@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>keywords_version</key>
+	<integer>7</integer>
+	<key>keywords</key>
+	<array>
+		<dict>
+			<key>uuid</key>
+			<string>KEYWORD-UUID-001</string>
+			<key>name</key>
+			<string>Nature</string>
+			<key>children</key>
+			<array>
+				<dict>
+					<key>uuid</key>
+					<string>KEYWORD-UUID-002</string>
+					<key>name</key>
+					<string>Landscape</string>
+				</dict>
+				<dict>
+					<key>uuid</key>
+					<string>KEYWORD-UUID-003</string>
+					<key>name</key>
+					<string>Wildlife</string>
+				</dict>
+			</array>
+		</dict>
+		<dict>
+			<key>uuid</key>
+			<string>KEYWORD-UUID-004</string>
+			<key>name</key>
+			<string>Events</string>
+			<key>children</key>
+			<array>
+				<dict>
+					<key>uuid</key>
+					<string>KEYWORD-UUID-005</string>
+					<key>name</key>
+					<string>Wedding</string>
+				</dict>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
