@@ -126,6 +126,14 @@ pub fn write_rdf_bag(xmp: &mut Xmp, namespace: &str, property: &str, values: &[S
     if values.is_empty() {
         return;
     }
+    // Create the array property first
+    if let Err(e) = xmp.set_property(namespace, property, "", exempi2::PropFlags::VALUE_IS_ARRAY) {
+        eprintln!(
+            "Warning: Failed to create XMP array '{}:{}': {:?}",
+            namespace, property, e
+        );
+        return;
+    }
     for (i, v) in values.iter().enumerate() {
         let index = (i as i32) + 1;
         let clean = sanitize_for_xmp(v);
@@ -142,6 +150,19 @@ pub fn write_rdf_bag(xmp: &mut Xmp, namespace: &str, property: &str, values: &[S
 /// Vector of strings -> rdf:Seq property in XMP
 pub fn write_rdf_seq(xmp: &mut Xmp, namespace: &str, property: &str, values: &[String]) {
     if values.is_empty() {
+        return;
+    }
+    // Create the ordered array property first
+    if let Err(e) = xmp.set_property(
+        namespace,
+        property,
+        "",
+        exempi2::PropFlags::VALUE_IS_ARRAY | exempi2::PropFlags::ARRAY_IS_ORDERED,
+    ) {
+        eprintln!(
+            "Warning: Failed to create XMP ordered array '{}:{}': {:?}",
+            namespace, property, e
+        );
         return;
     }
     for (i, v) in values.iter().enumerate() {
