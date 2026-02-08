@@ -8,7 +8,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Serialize, Deserialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::audit::{
     audit_get_array_value, audit_get_bool_value, audit_get_date_value, audit_get_dict_value,
@@ -67,6 +67,12 @@ pub struct Version {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub custom_aplib_fields: Option<std::collections::BTreeMap<String, String>>,
+
+    /// Directory where this version's plist file was loaded from.
+    /// NOTE: This path points to the Versions tree (Database/Versions/.../UUID/).
+    /// To locate the actual image file, transform this to the Masters tree path.
+    /// See `transform_versions_to_masters_path()` in src/bin/dumper/exporter.rs
+    pub source_directory: Option<PathBuf>,
 }
 
 impl PlistLoadable for Version {
@@ -77,13 +83,17 @@ impl PlistLoadable for Version {
     {
         use crate::plutils::*;
 
-        let plist = parse_plist(plist_path);
+        let plist = parse_plist(&plist_path);
+        
+        // Capture the directory where this plist file is located
+        let source_directory = plist_path.as_ref().parent().map(|p| p.to_path_buf());
+        
         match plist {
             Value::Dictionary(ref dict) => {
                 let iptc = audit_get_dict_value(dict, "iptcProperties", &mut auditor);
                 let exif = audit_get_dict_value(dict, "exifProperties", &mut auditor);
                 let custom_info = audit_get_dict_value(dict, "customInfo", &mut auditor);
-                let result = Some(Version {
+                let mut result = Version {
                     uuid: audit_get_str_value(dict, "uuid", &mut auditor),
                     master_uuid: audit_get_str_value(dict, "masterUuid", &mut auditor),
                     project_uuid: audit_get_str_value(dict, "projectUuid", &mut auditor),
@@ -124,7 +134,12 @@ impl PlistLoadable for Version {
                             .filter_map(|v| v.as_string().map(|s| s.trim().to_string()))
                             .collect()),
                     custom_aplib_fields: dict_to_btreemap(audit_get_dict_value(dict, "customAplibFields", &mut auditor)),
-                });
+                    source_directory: None, // Set after construction
+                };
+                
+                // Set the source directory
+                result.source_directory = source_directory;
+                
                 if let Some(auditor) = &mut auditor {
                     auditor.skip("statistics", SkipReason::Ignore);
                     auditor.skip("thumbnailGroup", SkipReason::Ignore);
@@ -144,7 +159,7 @@ impl PlistLoadable for Version {
                     auditor.skip("plistWriteTimestamp", SkipReason::Ignore);
                     auditor.audit_ignored(dict, None);
                 }
-                result
+                Some(result)
             }
             _ => None,
         }

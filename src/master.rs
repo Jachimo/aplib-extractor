@@ -36,8 +36,10 @@ pub struct Master {
 
     /// If it is RAW+JPEG, there is another master.
     pub alternate_master: Option<String>,
+    
     /// uuid of the orignal version
     pub original_version_uuid: Option<String>,
+
     pub import_group_uuid: Option<String>,
     pub filename: Option<String>,
     pub name: Option<String>,
@@ -61,7 +63,7 @@ pub struct Master {
     pub color_space_name: Option<String>,
     pub pixel_format: Option<i64>,
     pub has_focus_points: Option<i64>,
-    pub image_format: Option<i64>, // XXX fix this is a 4char MSB
+    pub image_format: Option<i64>, // TODO: fix this is a 4char MSB
     pub notes: Option<Vec<NotesProperties>>,
     pub colour_space_definition: Option<Vec<u8>>,
     pub face_detection_state: Option<i64>,
@@ -200,7 +202,7 @@ impl ToXmp for Master {
         // Custom Aperture namespace for Aperture-specific fields
         let aplib_ns = ns::APLIB;
         let xmp_ns = "http://ns.adobe.com/xap/1.0/";
-        let exif_ns = "http://ns.adobe.com/exif/1.0/";
+        let _exif_ns = "http://ns.adobe.com/exif/1.0/";  // not currently used; reserved for EXIF-specific fields
         let tiff_ns = "http://ns.adobe.com/tiff/1.0/";
 
         // UUID
@@ -358,11 +360,12 @@ impl ToXmp for Master {
                 }
             }
         }
+
         // Write keywords into Dublin Core (flat, for compatibility)
         if let Some(ref keywords) = self.keywords {
             crate::xmp::write_rdf_bag(xmp, crate::xmp::ns::NS_DC, "subject", keywords);
         }
-
+ 
         // Write hierarchical keywords into digiKam TagsList (ordered, with full paths)
         if let Some(ref custom) = self.custom_aplib_fields {
             if let Some(hierarchical_json) = custom.get("_resolved_hierarchical_keywords") {
@@ -415,6 +418,6 @@ fn test_master_parse() {
     assert_eq!(master.master_type.as_ref().unwrap(), "IMGT");
     assert_eq!(master.subtype.as_ref().unwrap(), "RAWST");
 
-    // XXX fix when have actual audit.
+    // TODO: fix when have actual audit.
     //    println!("report {:?}", report);
 }

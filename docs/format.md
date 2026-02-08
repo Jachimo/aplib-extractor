@@ -291,9 +291,39 @@ Properties:
 * `keywords_verions` (integer): 6 or 7. Not sure which is what, I don't
   see difference otherwise.
 
+#### Keyword Storage Formats
+
+Aperture stores keywords in three different formats:
+
+1. **UUIDs** - References to keywords defined in Keywords.plist (normal case)
+2. **Direct names** - Plain text keyword names (e.g., "iPhoto Original" from imported iPhoto libraries)
+3. **Hierarchical keywords with multi-space delimiters** - Multiple keywords encoded in a single string
+
+**Multi-Space Delimiter Convention**: When a keyword string contains 2 or more consecutive spaces,
+it represents hierarchical keywords separated by those spaces. Single spaces are part of the keyword name.
+
+Examples:
+- `"iPhoto Original"` (1 space) → Single keyword: "iPhoto Original"
+- `"Wedding  Stock Category"` (2+ spaces) → Two keywords: "Wedding" (child of "Stock Category")
+- `"New York  USA"` (2+ spaces) → Two keywords: "New York" (child of "USA")
+
+The rightmost keyword in the hierarchy is the parent, with keywords to the left being progressively
+more specific children.
+
+**Keyword Sanitization**: All keywords are sanitized before export to XMP to remove null bytes and
+illegal XML control characters. This ensures compatibility with the XMP specification.
+more specific children.
+
 ### "Database/Versions" Directory
 
 Contains edited versions of photos in the Library.
+
+**IMPORTANT STRUCTURE NOTE**: The Versions directory tree contains ONLY metadata plist files:
+- **Metadata plist files** (`Master.apmaster`, `Version-N.apversion`) - stored here
+- **Actual image files** - stored in the `Masters/` tree, NOT in `Database/Versions/`
+
+The `.apversion` extension is on **plist FILES**, not directories. Do not confuse
+the file extension with a directory name.
 
 ```
 LibraryName.aplibrary
@@ -304,22 +334,32 @@ LibraryName.aplibrary
 |           +- 08
 |              +- 20061108-161812
 |                 +- 1pzPIlOcSayg7qQdE%UVEg
-|                    +- Master.apmaster
-|                    +- Version-0.apversion
-|                    +- Version-1.apversion
-|                    +- ... etc.
+|                    +- Master.apmaster           (plist file - metadata ONLY)
+|                    +- Version-0.apversion       (plist file - metadata ONLY)
+|                    +- Version-1.apversion       (plist file - metadata ONLY)
++- Masters
+   +- 2006
+      +- 11
+         +- 08
+            +- 20061108-161812
+               +- PICT0019.JPG                    (actual master image file)
+               +- PICT0019-edited.JPG            (actual version image file)
+               +- ... etc.
 ```
 
-Images are into subdirectories by year, then month, then day, and
+**KEY INSIGHT**: Version images are stored in the `Masters/` directory tree using the
+same date-based path structure (`YYYY/MM/DD/YYYYMMDD-HHMMSS/`), but WITHOUT the UUID
+subdirectories that exist in `Database/Versions/`.
+
+The Versions directories organize metadata by year, then month, then day, and
 then finally into a directory named YYYYMMDD-HHMMSS, 
 e.g. `20061108-161812`.  
-This appears to correspond to the hierarchy used to store Masters
-as well, but this has not been thoroughly verified.
+This hierarchy mirrors the structure used to store Masters.
 
 Inside the date/time directory are one or more directories with
-GUID-based names, each representing a Master and one or more Versions.
+GUID-based names (UUIDs), each representing a Master and its associated Versions' metadata.
 
-There is no guarantee that each Master in the Library will have an
+**Important**: There is no guarantee that each Master in the Library will have an
 associated GUID-named folder inside the Versions directory tree, as
 they are (it seems) created only when the user begins editing a Master.
 
@@ -332,6 +372,39 @@ If all you have is the Aperture Library and the Master is not
 present, recreating it from the Version information is likely not possible.
 Recovering a Thumbnail or rendered Preview (from the appropriate directories
 in the Library) may, in some cases, be the best you can do.
+
+#### Locating Version Image Files
+
+**Critical Implementation Detail**: The `Version-N.apversion` plist files contain
+a `fileName` property with ONLY the filename, no directory path information.
+
+**IMPORTANT**: Version image files are NOT stored in the `Database/Versions/` tree!
+They are stored in the `Masters/` tree.
+
+To locate the actual image file for a version:
+1. When parsing a `Version-N.apversion` plist file, capture its parent directory path
+2. Transform the Versions path to a Masters path by:
+   - Stripping the "Database/Versions/" prefix (or just "Versions/")
+   - Removing the UUID directory (last path component)
+   - Prepending "Masters/"
+3. The image file is: `{transformed_path}/{fileName_from_plist}`
+
+**Example**:
+- Plist file path: `Database/Versions/2014/12/20/20141220-173831/5DLLeHPLQhCFDLrRsFmSOQ/Version-1.apversion`
+- Parent directory: `Database/Versions/2014/12/20/20141220-173831/5DLLeHPLQhCFDLrRsFmSOQ/`
+- Strip prefix: `2014/12/20/20141220-173831/5DLLeHPLQhCFDLrRsFmSOQ/`
+- Remove UUID: `2014/12/20/20141220-173831/`
+- Add Masters prefix: `Masters/2014/12/20/20141220-173831/`
+- `fileName` property from plist: `"2014-12-20 17.38.31.jpg"`
+- **Image file location**: `Masters/2014/12/20/20141220-173831/2014-12-20 17.38.31.jpg`
+
+**Common Mistakes** (causes "file not found" errors):
+- ❌ Looking for images in `Database/Versions/.../UUID/` directory
+- ❌ Assuming UUID-based structure for image files
+- ❌ Treating `.apversion` as a directory instead of a file extension
+- ❌ Using `source_directory` path directly without transformation
+
+See "Implementation Notes for Library Parsers" section below for detailed guidance.
 
 ### Versions
 
@@ -375,6 +448,14 @@ Each version has a master.
 Binary plist file containing information about a specific version of a
 master.  One master can (and frequently does, in practice) have multiple versions.
 
+**Note on Locating Image Files**: The `fileName` property in this plist contains
+ONLY the filename (e.g., `"photo-edited.jpg"`), with NO directory path information.
+To locate the actual image file, you must use the parent directory of this plist file.
+See "Locating Version Image Files" in the Database/Versions section above.
+
+Properties:
+
+* `fileName`: **filename only**, no path (e.g., `"2014-12-20 17.38.31.jpg"`)
 * `isFlagged`: version flagged
 * `isOriginal`: this is the original version. Usually n=0.
 * `isEditable`
@@ -389,7 +470,10 @@ master.  One master can (and frequently does, in practice) have multiple version
 * `showInLibrary`: whether to show. false likely to be implicit version of
   master.
 * `name`: version name
-* `fileName`: filename for version
+* `fileName`: **filename only**, no directory path (e.g., `"IMG_1234-edit.jpg"`)
+  - To locate the image file, use the parent directory of this plist file
+  - Example: if plist is at `Database/Versions/2014/12/20/.../uuid/Version-1.apversion`
+  - Then image is at `Database/Versions/2014/12/20/.../uuid/{fileName}`
 * `mainRating`: rating
 * `rotation`: Image rotation in degrees.
 * `versionNumber`: the version number. n in the filename.
@@ -434,6 +518,249 @@ but not limited to:
 * `Vaults` (directory) - Contains one or more `.apvault` files, which presumably
   contain information about connected or previously-connected Aperture Vaults.
 * `VersionGroups` (directory) - ??
+
+
+## Implementation Notes for Library Parsers
+
+This section provides guidance for developers implementing Aperture library parsers,
+based on lessons learned during development of this tool.
+
+### Capturing Directory Paths and Locating Image Files
+
+When loading Version plist files, you MUST capture the parent directory path AND
+transform it to locate the actual image files (which are in the Masters tree, not
+the Versions tree).
+
+**Correct approach** (from this codebase - see `src/version.rs` and `src/bin/dumper/exporter.rs`):
+
+```rust
+// Step 1: When loading the plist, capture its parent directory
+fn from_path<P>(plist_path: P) -> Option<Version>
+where
+    P: AsRef<Path>,
+{
+    // Capture the parent directory of the plist file
+    let source_directory = plist_path.as_ref().parent().map(|p| p.to_path_buf());
+    
+    // ... parse plist data ...
+    
+    let version = Version {
+        // ... populate fields from plist ...
+        file_name: Some("2014-12-20 17.38.31.jpg".to_string()),
+        source_directory,  // Store for later use (contains Versions path)
+        // ...
+    };
+    
+    Some(version)
+}
+
+// Step 2: Transform Versions path to Masters path
+fn transform_versions_to_masters_path(versions_path: &Path) -> Option<PathBuf> {
+    let path_str = versions_path.to_str()?;
+    
+    // Strip "Database/Versions/" or "Versions/" prefix
+    let relative_path = if let Some(stripped) = path_str.strip_prefix("Database/Versions/") {
+        stripped
+    } else if let Some(stripped) = path_str.strip_prefix("Versions/") {
+        stripped
+    } else {
+        return None;
+    };
+    
+    // Remove UUID (last path component) to get date path
+    let path_without_uuid = Path::new(relative_path);
+    let parent_path = path_without_uuid.parent()?;
+    
+    // Build the Masters path
+    Some(Path::new("Masters").join(parent_path))
+}
+
+// Step 3: Locate the image file
+fn get_image_path(version: &Version, library_root: &Path) -> PathBuf {
+    let masters_path = transform_versions_to_masters_path(
+        version.source_directory.as_ref().unwrap()
+    ).unwrap();
+    
+    library_root.join(masters_path).join(version.file_name.as_ref().unwrap())
+}
+// Result: /path/to/Library.aplibrary/Masters/2014/12/20/20141220-173831/image.jpg
+```
+
+### Wrong Approaches That Cause "File Not Found" Errors
+
+❌ **Approach 1: Looking for images in Versions tree**
+
+This is WRONG and will result in missing files:
+
+```rust
+// WRONG - Images are NOT in the Versions tree!
+let image_path = version.source_directory
+    .as_ref()
+    .unwrap()
+    .join(version.file_name.as_ref().unwrap());
+// Result: Database/Versions/2014/12/20/20141220-173831/UUID/image.jpg
+// This path does NOT exist - there are only plist files here!
+```
+
+**Why this is wrong**:
+- The Versions tree contains ONLY metadata plist files
+- Actual image files are in the Masters tree
+- You must transform the path from Versions to Masters
+
+❌ **Approach 2: UUID-based directory assumption**
+
+```rust
+// WRONG - Do not do this!
+let image_path = format!(
+    "Database/Versions/{}/{}.apversion/{}",
+    &version_uuid[0..2],  // First 2 chars of UUID
+    version_uuid,
+    version.file_name
+);
+// Result: Database/Versions/5D/5DLLeHPLQhCFDLrRsFmSOQ.apversion/image.jpg
+// This path does NOT exist!
+```
+
+**Why this is wrong**:
+- Aperture uses date-based directories, not UUID-prefix-based
+- The actual path is: `Masters/2014/12/20/20141220-173831/image.jpg`
+- The `.apversion` is a file extension, not a directory
+
+❌ **Approach 3: Treating `.apversion` as a directory**
+
+```rust
+// WRONG - .apversion is a file extension, not a directory!
+let image_path = format!(
+    "Database/Versions/.../uuid/{}.apversion/{}",
+    version_number,
+    file_name
+);
+```
+
+**Why this is wrong**:
+- `Version-0.apversion` is a FILE (a plist), not a directory
+- Image files are in the Masters tree, not alongside plist files
+
+✅ **Correct approach**: Capture parent directory during loading, transform to Masters path, then join with filename
+
+### Real-World Impact
+
+The incorrect assumptions about version file locations resulted in:
+- **Thousands of "file does not exist" warnings** during export
+- **Unable to export version (edited) images** - only masters exported
+- Major data loss for libraries with significant editing history
+
+After implementing the correct approach (transform Versions paths to Masters paths):
+- All version images correctly located ✅
+- Full export with both masters and versions successful ✅
+- Zero "file not found" errors for existing files ✅
+
+### Cache and Serialization Considerations
+
+If you cache/serialize Version objects:
+
+**Problem**: The `source_directory` field contains a Versions tree path, which must
+be transformed to a Masters path when locating image files.
+
+**Solutions**:
+1. Always transform Versions paths to Masters paths before file access
+2. Store both paths (Versions for metadata context, Masters for image access)
+3. Regenerate cache if structure understanding changes
+
+Example from this codebase (`src/version.rs` and `src/bin/dumper/exporter.rs`):
+
+```rust
+pub struct Version {
+    // ... other fields ...
+    
+    /// Directory where this version's plist file was loaded from.
+    #[serde(skip)]  // Don't serialize - will be None after cache load
+    pub source_directory: Option<PathBuf>,
+}
+```
+
+### Code References
+
+For the actual implementation in this repository:
+- Version loading with directory capture: `src/version.rs` (lines 75-85)
+- Image path construction: `src/bin/dumper/exporter.rs` (lines 220-246)
+- Deprecated wrong approach: `src/bin/dumper/exporter.rs` `get_version_image_path()` function
+
+
+## Common Pitfalls
+
+### Pitfall #1: Assuming UUID-Based Directory Structure
+
+**Misconception**: Version directories follow `Database/Versions/{first2chars}/{uuid}.apversion/` pattern
+
+**Reality**: Versions use date-based structure: `{year}/{month}/{day}/{timestamp}/{uuid}/`
+
+**Why this mistake is easy to make**:
+- Some Apple data structures DO use UUID-based directories (e.g., iOS app sandboxes)
+- The `.apversion` file extension suggests it might be a directory container
+- Older documentation didn't explicitly state where image files are located
+- The UUID-based approach seems logical and consistent
+
+**Impact**: Files won't be found, leading to significant data loss during export/migration.
+
+### Pitfall #2: Not Storing Directory Paths During Loading
+
+**Problem**: The `fileName` property in Version plists contains no path information.
+
+**Consequence**: After loading metadata, you cannot locate the image files without
+the directory context.
+
+**Solution**: 
+- Capture the parent directory when parsing each plist file
+- Store it in your Version object/struct
+- Use it later to construct the full image file path
+
+**Example of the problem**:
+```python
+# You load a Version plist and get:
+version.fileName = "2014-12-20 17.38.31.jpg"
+version.uuid = "5DLLeHPLQhCFDLrRsFmSOQ"
+
+# Later, you try to find the image:
+image_path = ???  # No way to know where it is!
+```
+
+### Pitfall #3: File Extension Confusion
+
+**Problem**: The `.apversion` extension appears on plist FILES, not directories.
+
+**Misconception**: Thinking `Version-1.apversion` is a directory that contains the image.
+
+**Reality**: 
+```
+Directory structure:
+  uuid/
+    ├── Version-1.apversion  (this is a FILE, not a directory)
+    └── image.jpg            (this is a sibling, not a child)
+```
+
+### Pitfall #4: Ignoring Multiple Library Layouts
+
+**Issue**: Aperture libraries can have different structural layouts:
+- Masters in `Masters/` or `Database/Masters/`
+- Different Aperture versions may organize files differently
+
+**Solution**: Code must check for both possible locations and handle both gracefully.
+
+See `src/library.rs` `resolve_subdir()` function for an example implementation.
+
+### Pitfall #5: Cache Invalidation
+
+**Problem**: Cached Version objects may lose directory path information.
+
+**Consequence**: After loading from cache, you can't find image files anymore.
+
+**Solution**:
+- Don't serialize directory paths (mark as transient/skip)
+- Rebuild paths from library structure when needed
+- Or, accept that cache miss forces full reload to recapture paths
+
+This codebase uses `#[serde(skip)]` to avoid caching directory paths entirely.
 
 
 ## Masters

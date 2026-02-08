@@ -41,7 +41,10 @@ Objects are stored in the `Library` struct, keyed by UUID strings.
 
 ### Aperture Library Structure
 
-Aperture libraries (`.aplibrary` bundles) have two possible directory layouts:
+General notes on the format of Aperture libraries (`.aplibrary` bundles) is provided in the `docs/format.md` file.
+This file should be read to understand what is known about the format.
+
+In brief: Aperture Library bundles have two possible directory layouts:
 
 1. **Root-level structure** (possibly older libraries):
    - `Info.plist` - Bundle metadata
@@ -53,20 +56,37 @@ Aperture libraries (`.aplibrary` bundles) have two possible directory layouts:
 2. **Database subdirectory structure** (possibly newer libraries):
    - `Database/Albums/`
    - `Database/Folders/`
-   - `Database/Masters/`
    - `Database/Keywords.plist`
-   - `Database/Versions/` - Edited versions (`.apversion` and `.apmaster` files)
+   - `Database/Versions/` - **METADATA ONLY** (`.apversion` and `.apmaster` plist files)
    - `Database/apdb/Library.apdb` - SQLite database
+   - `Masters/` - **Actual image files** for both masters AND versions
+
+**CRITICAL**: Version image files are stored in `Masters/YYYY/MM/DD/YYYYMMDD-HHMMSS/`, 
+NOT in the `Database/Versions/` tree. The Versions tree contains only metadata plist files.
 
 The code in `library.rs` handles both layouts via `resolve_subdir()`.
 
+### Actual Library Example Structure
+
+An example of an actual `Aperture Library.aplibrary` bundle is provided (in the form
+of output from the Linux `tree` command) in the file `docs/structure.txt`. 
+
+NOTE: This file is quite large (40+ MB), use caution when reading/parsing it.
+
+If this is available, it should be used to resolve ambiguities or bugs in the code.
+
 ### Key Relationships
 
-- **Masters** are original images, stored in `Masters/` with relative paths
-- **Versions** are edited variants, stored in `Database/Versions/` in UUID-based subdirectories (first 2 chars of UUID)
+- **Masters** are original images, stored in `Masters/YYYY/MM/DD/YYYYMMDD-HHMMSS/` with date-based paths
+- **Versions** are edited variants:
+  - **Metadata** (plist files): stored in `Database/Versions/YYYY/MM/DD/YYYYMMDD-HHMMSS/UUID/`
+  - **Image files**: stored in `Masters/YYYY/MM/DD/YYYYMMDD-HHMMSS/` (same location as masters!)
 - **Projects** are Folders with `folder_type = Project`
 - **Albums** belong to Folders via `parent` UUID
 - **Volumes** represent external storage locations (can be in plist files or SQLite database)
+
+**Key Insight**: Version images and master images share the same directory structure in `Masters/`. 
+Only the metadata plists are separated into `Database/Versions/` with UUID subdirectories.
 
 ### Export Functionality
 
@@ -74,7 +94,8 @@ The `export` command (`src/bin/dumper/exporter.rs`):
 1. Loads all library objects (masters, versions, albums, folders, keywords)
 2. Uses a local cache file (`/tmp/aplib_cache_*.bin`) to speed up repeated operations on network-mounted libraries
 3. Generates `ExportJob` structs that group masters with their versions
-4. Copies image files and generates XMP sidecars containing:
+4. **Transforms Version paths**: Converts `Database/Versions/.../UUID/` paths to `Masters/.../` paths to locate actual image files
+5. Copies image files and generates XMP sidecars containing:
    - Standard EXIF/IPTC metadata
    - Aperture-specific metadata in custom `aplib:` namespace
    - Resolved keyword names (converted from UUIDs)
@@ -100,7 +121,14 @@ The `xmp.rs` module provides the `ToXmp` trait for converting Aperture metadata 
 
 - Progress bars use `pbr` crate and stderr
 - Versions directory scanning is slow on large libraries - uses progress bar
-- Keywords are resolved from UUID references to human-readable names during export
+- **Keywords** are resolved from UUID references to human-readable names during export:
+  - UUIDs are looked up in the keyword map
+  - Non-UUID strings are treated as direct names (iPhoto imports)
+  - Multi-space delimiters (2+ consecutive spaces) split hierarchical keywords
+  - Example: "Wedding  Stock Category" becomes two keywords: "Wedding" and "Stock Category"
+  - All keywords are sanitized to remove null bytes and illegal XML characters before XMP export
+- **Version file paths**: The `Version.source_directory` field captures the plist location in `Database/Versions/`, 
+  but must be transformed to `Masters/` tree to find actual image files (see `transform_versions_to_masters_path()` in exporter.rs)
 - The code handles missing/corrupted files gracefully with warnings
 - Audit mode (`audit` command) tracks parsing issues and skipped files
 - The SQLite database is only accessed as a fallback when plist files are missing
@@ -113,7 +141,7 @@ The `xmp.rs` module provides the `ToXmp` trait for converting Aperture metadata 
 - `src/bin/dumper/exporter.rs` - Export functionality
 - `src/bin/dumper/tree.rs` - Tree view command
 - `src/{album,folder,master,version,volume,keyword}.rs` - Individual object types
-- `src/xmp.rs` - XMP metadata generation
+- `src/xmp.rs` - XMP metadata generation and sanitization utilities
 - `src/audit.rs` - Auditing/validation framework
 
 ## External Dependencies

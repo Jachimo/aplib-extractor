@@ -182,13 +182,62 @@ pub fn get_master_root(library_abs: &Path) -> PathBuf {
     }
 }
 
+/// Transform a Versions directory path to the corresponding Masters directory path.
+/// Version image files are stored in the Masters tree, not in the Versions tree.
+/// 
+/// Example transformation:
+/// - Input: `/path/to/Library.aplibrary/Database/Versions/2006/11/03/20061103-133939/UUID`
+/// - Output: `Masters/2006/11/03/20061103-133939`
+fn transform_versions_to_masters_path(versions_path: &Path) -> Option<PathBuf> {
+    // Convert to string for easier manipulation
+    let path_str = versions_path.to_str()?;
+    
+    // Find the "Versions/" component in the path (could be absolute or relative)
+    // Look for "Database/Versions/" first, then fall back to just "Versions/"
+    let relative_path = if let Some(pos) = path_str.find("Database/Versions/") {
+        // Skip past "Database/Versions/"
+        &path_str[pos + "Database/Versions/".len()..]
+    } else if let Some(pos) = path_str.find("/Versions/") {
+        // Skip past "/Versions/"
+        &path_str[pos + "/Versions/".len()..]
+    } else if let Some(pos) = path_str.find("Versions/") {
+        // Skip past "Versions/" (at start of path)
+        &path_str[pos + "Versions/".len()..]
+    } else {
+        // Path doesn't contain "Versions/" - can't transform
+        return None;
+    };
+    
+    // The relative path is now like: "2006/11/03/20061103-133939/UUID"
+    // We need to remove the UUID (last component) to get: "2006/11/03/20061103-133939"
+    let path_without_uuid = Path::new(relative_path);
+    let parent_path = path_without_uuid.parent()?;
+    
+    // Build the Masters path
+    Some(Path::new("Masters").join(parent_path))
+}
+
+/// DEPRECATED: This function is a last-resort fallback for when Version.source_directory is None.
+/// This only happens with old cached data. The function cannot reliably locate version files
+/// because it lacks the timestamp directory information (YYYYMMDD-HHMMSS) needed to construct
+/// the correct Masters path. 
+/// 
+/// The correct approach is to use Version.source_directory which is captured during loading.
+/// If you see this warning, consider clearing the cache to reload fresh metadata.
 pub fn get_version_image_path(library_path: &str, version_uuid: &str, file_name: &str) -> PathBuf {
-    let subdir = &version_uuid[0..2];
+    // We don't have enough information to construct the correct path.
+    // Version images are in Masters/YYYY/MM/DD/YYYYMMDD-HHMMSS/ but we don't know the timestamp.
+    // Return a placeholder path that will fail - this forces cache regeneration.
+    eprintln!(
+        "ERROR: Cannot construct version path for {} without source_directory metadata.",
+        version_uuid
+    );
+    eprintln!("       Clear the cache (/tmp/aplib_cache_*.bin) and try again.");
+    
+    // Return an obviously wrong path to ensure it fails
     Path::new(library_path)
-        .join("Database")
-        .join("Versions")
-        .join(subdir)
-        .join(format!("{version_uuid}.apversion"))
+        .join("CACHE_OUT_OF_DATE")
+        .join(version_uuid)
         .join(file_name)
 }
 
@@ -226,11 +275,33 @@ pub fn build_export_jobs(
             if version.master_uuid.as_ref() == Some(master_uuid) {
                 version_uuids.push(version_uuid.clone());
                 let version_file = version.file_name.clone().unwrap_or_default();
-                let version_path = get_version_image_path(
-                    library_abs.to_str().unwrap(),
-                    version_uuid,
-                    &version_file,
-                );
+                
+                // Transform the source_directory path from Versions tree to Masters tree
+                let version_path = if let Some(ref source_dir) = version.source_directory {
+                    // Transform: Database/Versions/.../UUID -> Masters/.../
+                    if let Some(masters_dir) = transform_versions_to_masters_path(source_dir) {
+                        library_abs.join(masters_dir).join(&version_file)
+                    } else {
+                        // Transformation failed - try using source_dir directly as fallback
+                        eprintln!(
+                            "Warning: Failed to transform version path for {}, trying source_directory directly",
+                            version_uuid
+                        );
+                        library_abs.join(source_dir).join(&version_file)
+                    }
+                } else {
+                    // Fallback to old logic (will likely fail, but preserves old behavior)
+                    eprintln!(
+                        "Warning: Version {} has no source_directory, using fallback path logic (may not find file)",
+                        version_uuid
+                    );
+                    get_version_image_path(
+                        library_abs.to_str().unwrap(),
+                        version_uuid,
+                        &version_file,
+                    )
+                };
+                
                 let version_filename = format!(
                     "{}_version_{}{}",
                     master_uuid,
@@ -322,5 +393,48 @@ pub fn process_export(args: &super::ExportArgs) {
                 eprintln!("Failed to export {}: {}", job.master_uuid, e);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_transform_versions_to_masters_path() {
+        // Test with Database/Versions prefix (relative path)
+        let input = Path::new("Database/Versions/2006/11/03/20061103-133939/7KRjR0TQSZedV48EWiDYyA");
+        let expected = PathBuf::from("Masters/2006/11/03/20061103-133939");
+        let result = transform_versions_to_masters_path(input);
+        assert_eq!(result, Some(expected));
+
+        // Test with just Versions prefix (older library format, relative path)
+        let input = Path::new("Versions/2014/10/05/20141005-184407/Pbd+7C%eSAuTJLOuxQjhvQ");
+        let expected = PathBuf::from("Masters/2014/10/05/20141005-184407");
+        let result = transform_versions_to_masters_path(input);
+        assert_eq!(result, Some(expected));
+
+        // Test with absolute path (most common in real usage)
+        let input = Path::new("/mnt/photos/Library.aplibrary/Database/Versions/2009/05/05/20090505-224454/NPMbcoBPTtiuQhjqjG%FpQ");
+        let expected = PathBuf::from("Masters/2009/05/05/20090505-224454");
+        let result = transform_versions_to_masters_path(input);
+        assert_eq!(result, Some(expected));
+
+        // Test with different UUID format (absolute path)
+        let input = Path::new("/home/user/Aperture Library.aplibrary/Versions/2014/12/20/20141220-173831/5DLLeHPLQhCFDLrRsFmSOQ");
+        let expected = PathBuf::from("Masters/2014/12/20/20141220-173831");
+        let result = transform_versions_to_masters_path(input);
+        assert_eq!(result, Some(expected));
+
+        // Test with invalid path (no Versions prefix)
+        let input = Path::new("/path/to/Masters/2006/11/03/20061103-133939");
+        let result = transform_versions_to_masters_path(input);
+        assert_eq!(result, None);
+
+        // Test with incomplete path (no UUID to strip)
+        let input = Path::new("Database/Versions/2006");
+        let result = transform_versions_to_masters_path(input);
+        // Should return Some but with just the year
+        assert!(result.is_some());
     }
 }
