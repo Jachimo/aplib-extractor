@@ -41,7 +41,15 @@ fn export_job_files(
 
     // Create the output directory
     let master_out_dir = out_dir.join(&job.master_rel_dir);
-    fs::create_dir_all(&master_out_dir)?;
+    fs::create_dir_all(&master_out_dir).map_err(|e| {
+        eprintln!(
+            "Error creating output directory:\n  Path:  {}\n  Error: {} (os error: {:?})",
+            master_out_dir.display(),
+            e,
+            e.raw_os_error()
+        );
+        e
+    })?;
 
     // Copy master
     let master_out = master_out_dir.join(&job.master_filename);
@@ -49,7 +57,16 @@ fn export_job_files(
         eprintln!("Warning: master file {} does not exist, skipping.", job.master_path.display());
         return Ok(());
     }
-    fs::copy(&job.master_path, &master_out)?;
+    fs::copy(&job.master_path, &master_out).map_err(|e| {
+        eprintln!(
+            "Error copying master file:\n  Source: {}\n  Dest:   {}\n  Error:  {} (os error: {:?})",
+            job.master_path.display(),
+            master_out.display(),
+            e,
+            e.raw_os_error()
+        );
+        e
+    })?;
 
     // Write master XMP sidecar (same basename, .xmp extension)
     let master_sidecar = master_out.with_extension("xmp");
@@ -98,7 +115,15 @@ fn export_job_files(
         }
     }
     // Create and write the sidecar file 
-    let mut file = fs::File::create(&master_sidecar)?;
+    let mut file = fs::File::create(&master_sidecar).map_err(|e| {
+        eprintln!(
+            "Error creating master XMP sidecar:\n  Path:  {}\n  Error: {} (os error: {:?})",
+            master_sidecar.display(),
+            e,
+            e.raw_os_error()
+        );
+        e
+    })?;
     let xmp_string = xmp.serialize(SerialFlags::default(), 0)
         .unwrap_or_else(|_| exempi2::XmpString::new());
     file.write_all(xmp_string.to_string().as_bytes())?;
@@ -111,9 +136,27 @@ fn export_job_files(
         }
         // Place version in the same subdirectory as the master (unified output tree)
         let version_out_dir = master_out_dir.clone();
-        fs::create_dir_all(&version_out_dir)?;
+        fs::create_dir_all(&version_out_dir).map_err(|e| {
+            eprintln!(
+                "Error creating version output directory:\n  Path:  {}\n  Error: {} (os error: {:?})",
+                version_out_dir.display(),
+                e,
+                e.raw_os_error()
+            );
+            e
+        })?;
         let dest = version_out_dir.join(dest_name);
-        fs::copy(src, &dest)?;
+        fs::copy(src, &dest).map_err(|e| {
+            eprintln!(
+                "Error copying version file:\n  Version UUID: {}\n  Source: {}\n  Dest:   {}\n  Error:  {} (os error: {:?})",
+                version_uuid,
+                src.display(),
+                dest.display(),
+                e,
+                e.raw_os_error()
+            );
+            e
+        })?;
 
         // Write version XMP sidecar
         let version_sidecar = dest.with_extension("xmp");
@@ -159,7 +202,16 @@ fn export_job_files(
             XmpProperty::new(ns::APLIB, "MasterUUID").put_into_xmp(&job.master_uuid, &mut xmp);
             XmpProperty::new(ns::APLIB, "MasterFilename").put_into_xmp(&job.master_filename, &mut xmp);
         }
-        let mut file = fs::File::create(&version_sidecar)?;
+        let mut file = fs::File::create(&version_sidecar).map_err(|e| {
+            eprintln!(
+                "Error creating version XMP sidecar:\n  Version UUID: {}\n  Path:  {}\n  Error: {} (os error: {:?})",
+                version_uuid,
+                version_sidecar.display(),
+                e,
+                e.raw_os_error()
+            );
+            e
+        })?;
         let xmp_string = xmp.serialize(SerialFlags::default(), 0)
             .unwrap_or_else(|_| exempi2::XmpString::new());
         file.write_all(xmp_string.to_string().as_bytes())?;
@@ -217,6 +269,61 @@ fn transform_versions_to_masters_path(versions_path: &Path) -> Option<PathBuf> {
     Some(Path::new("Masters").join(parent_path))
 }
 
+/// Search for a version image file in the Masters tree with flexible subdirectory handling.
+/// 
+/// Version images may be stored:
+/// - Directly: `Masters/.../YYYYMMDD-HHMMSS/filename.jpg`
+/// - In subdirectories: `Masters/.../YYYYMMDD-HHMMSS/{subdir}/filename.jpg`
+/// 
+/// This function searches the timestamp directory and its immediate subdirectories.
+/// 
+/// Note: Aperture metadata sometimes contains `:nopm:` (no PM/AM marker) in filenames,
+/// but actual disk files don't have this string. We try both the original filename
+/// and a version with `:nopm:` stripped.
+fn find_version_image_file(masters_timestamp_dir: &Path, filename: &str) -> Option<PathBuf> {
+    // Try to find the file with the original filename
+    if let Some(path) = try_find_file(masters_timestamp_dir, filename) {
+        return Some(path);
+    }
+    
+    // If filename contains :nopm:, try again with it stripped
+    // Example: "IMG_20150724_154440:nopm:.jpg" -> "IMG_20150724_154440.jpg"
+    if filename.contains(":nopm:") {
+        let clean_filename = filename.replace(":nopm:", "");
+        if let Some(path) = try_find_file(masters_timestamp_dir, &clean_filename) {
+            return Some(path);
+        }
+    }
+    
+    None
+}
+
+/// Helper function to search for a file in a directory and its immediate subdirectories
+fn try_find_file(masters_timestamp_dir: &Path, filename: &str) -> Option<PathBuf> {
+    // First try the direct path
+    let direct_path = masters_timestamp_dir.join(filename);
+    if direct_path.exists() {
+        return Some(direct_path);
+    }
+    
+    // Search in subdirectories (one level deep)
+    if let Ok(entries) = fs::read_dir(masters_timestamp_dir) {
+        for entry in entries.flatten() {
+            if let Ok(file_type) = entry.file_type() {
+                if file_type.is_dir() {
+                    let subdir_path = entry.path().join(filename);
+                    if subdir_path.exists() {
+                        return Some(subdir_path);
+                    }
+                }
+            }
+        }
+    }
+    
+    None
+}
+
+
 /// DEPRECATED: This function is a last-resort fallback for when Version.source_directory is None.
 /// This only happens with old cached data. The function cannot reliably locate version files
 /// because it lacks the timestamp directory information (YYYYMMDD-HHMMSS) needed to construct
@@ -250,6 +357,20 @@ pub fn build_export_jobs(
     let master_root = get_master_root(library_abs);
 
     for (master_uuid, master) in &cache.master_map {
+        // Skip trashed files silently
+        if master.is_in_trash == Some(true) {
+            continue;
+        }
+        
+        // Warn about missing files but continue processing
+        if master.is_missing == Some(true) {
+            eprintln!(
+                "Warning: master {} is marked as missing in library metadata, file may not exist",
+                master_uuid
+            );
+            // Continue anyway - the file existence check later will handle it
+        }
+        
         // Master file info
         let image_path = match master.image_path.as_ref() {
             Some(p) => p,
@@ -273,6 +394,11 @@ pub fn build_export_jobs(
         let mut version_filenames = Vec::new();
         for (version_uuid, version) in &cache.version_map {
             if version.master_uuid.as_ref() == Some(master_uuid) {
+                // Skip original versions - they're identical to the master which is already exported
+                if version.is_original == Some(true) {
+                    continue;
+                }
+                
                 version_uuids.push(version_uuid.clone());
                 let version_file = version.file_name.clone().unwrap_or_default();
                 
@@ -280,7 +406,19 @@ pub fn build_export_jobs(
                 let version_path = if let Some(ref source_dir) = version.source_directory {
                     // Transform: Database/Versions/.../UUID -> Masters/.../
                     if let Some(masters_dir) = transform_versions_to_masters_path(source_dir) {
-                        library_abs.join(masters_dir).join(&version_file)
+                        let masters_timestamp_dir = library_abs.join(&masters_dir);
+                        // Search flexibly for the file (may be in subdirectories)
+                        if let Some(found_path) = find_version_image_file(&masters_timestamp_dir, &version_file) {
+                            found_path
+                        } else {
+                            // File not found even with flexible search
+                            eprintln!(
+                                "Warning: Could not find version file '{}' for version {} in {}",
+                                version_file, version_uuid, masters_timestamp_dir.display()
+                            );
+                            // Return a non-existent path so the later check will skip it
+                            masters_timestamp_dir.join(&version_file)
+                        }
                     } else {
                         // Transformation failed - try using source_dir directly as fallback
                         eprintln!(
