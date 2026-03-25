@@ -134,6 +134,16 @@ fn export_job_files(
             eprintln!("Warning: version file {} does not exist, skipping.", src.display());
             continue;
         }
+        
+        // Check if version file is the same as master file (metadata-only version)
+        let is_same_as_master = match (src.canonicalize(), job.master_path.canonicalize()) {
+            (Ok(v), Ok(m)) => v == m,
+            _ => {
+                // If canonicalize fails, fall back to simple path comparison
+                src == &job.master_path
+            }
+        };
+        
         // Place version in the same subdirectory as the master (unified output tree)
         let version_out_dir = master_out_dir.clone();
         fs::create_dir_all(&version_out_dir).map_err(|e| {
@@ -145,20 +155,30 @@ fn export_job_files(
             );
             e
         })?;
+        
         let dest = version_out_dir.join(dest_name);
-        fs::copy(src, &dest).map_err(|e| {
-            eprintln!(
-                "Error copying version file:\n  Version UUID: {}\n  Source: {}\n  Dest:   {}\n  Error:  {} (os error: {:?})",
-                version_uuid,
-                src.display(),
-                dest.display(),
-                e,
-                e.raw_os_error()
-            );
-            e
-        })?;
+        
+        // Only copy image file if it's different from the master
+        if is_same_as_master {
+            eprintln!("  Version {} (metadata-only, using master image)", version_uuid);
+            // Don't copy the file - it's the same as the master
+            // We'll still create the XMP sidecar below
+        } else {
+            eprintln!("  Version {} (separate rendered image)", version_uuid);
+            fs::copy(src, &dest).map_err(|e| {
+                eprintln!(
+                    "Error copying version file:\n  Version UUID: {}\n  Source: {}\n  Dest:   {}\n  Error:  {} (os error: {:?})",
+                    version_uuid,
+                    src.display(),
+                    dest.display(),
+                    e,
+                    e.raw_os_error()
+                );
+                e
+            })?;
+        }
 
-        // Write version XMP sidecar
+        // Write version XMP sidecar (always, regardless of whether image was copied)
         let version_sidecar = dest.with_extension("xmp");
         let mut xmp = exempi2::Xmp::new();
         if let Some(version) = cache.version_map.get(version_uuid) {
@@ -274,15 +294,16 @@ fn transform_versions_to_masters_path(versions_path: &Path) -> Option<PathBuf> {
 /// Version images may be stored:
 /// - Directly: `Masters/.../YYYYMMDD-HHMMSS/filename.jpg`
 /// - In subdirectories: `Masters/.../YYYYMMDD-HHMMSS/{subdir}/filename.jpg`
+/// - In deeply nested subdirectories: `Masters/.../YYYYMMDD-HHMMSS/Users/jtuttle/Dropbox/photos/folder/file.jpg`
 /// 
-/// This function searches the timestamp directory and its immediate subdirectories.
+/// This function searches the timestamp directory recursively for the file.
 /// 
 /// Note: Aperture metadata sometimes contains `:nopm:` (no PM/AM marker) in filenames,
 /// but actual disk files don't have this string. We try both the original filename
 /// and a version with `:nopm:` stripped.
 fn find_version_image_file(masters_timestamp_dir: &Path, filename: &str) -> Option<PathBuf> {
     // Try to find the file with the original filename
-    if let Some(path) = try_find_file(masters_timestamp_dir, filename) {
+    if let Some(path) = try_find_file_recursive(masters_timestamp_dir, filename) {
         return Some(path);
     }
     
@@ -290,7 +311,7 @@ fn find_version_image_file(masters_timestamp_dir: &Path, filename: &str) -> Opti
     // Example: "IMG_20150724_154440:nopm:.jpg" -> "IMG_20150724_154440.jpg"
     if filename.contains(":nopm:") {
         let clean_filename = filename.replace(":nopm:", "");
-        if let Some(path) = try_find_file(masters_timestamp_dir, &clean_filename) {
+        if let Some(path) = try_find_file_recursive(masters_timestamp_dir, &clean_filename) {
             return Some(path);
         }
     }
@@ -298,22 +319,33 @@ fn find_version_image_file(masters_timestamp_dir: &Path, filename: &str) -> Opti
     None
 }
 
-/// Helper function to search for a file in a directory and its immediate subdirectories
-fn try_find_file(masters_timestamp_dir: &Path, filename: &str) -> Option<PathBuf> {
-    // First try the direct path
-    let direct_path = masters_timestamp_dir.join(filename);
+/// Recursively search for a file in a directory tree.
+/// This handles cases where version files are stored in deeply nested subdirectories
+/// like `Users/jtuttle/Dropbox/photos/folder/file.jpg`.
+fn try_find_file_recursive(dir: &Path, target_filename: &str) -> Option<PathBuf> {
+    // First try the direct path (most common case)
+    let direct_path = dir.join(target_filename);
     if direct_path.exists() {
         return Some(direct_path);
     }
     
-    // Search in subdirectories (one level deep)
-    if let Ok(entries) = fs::read_dir(masters_timestamp_dir) {
+    // Recursively search subdirectories
+    if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             if let Ok(file_type) = entry.file_type() {
+                let entry_path = entry.path();
+                
                 if file_type.is_dir() {
-                    let subdir_path = entry.path().join(filename);
-                    if subdir_path.exists() {
-                        return Some(subdir_path);
+                    // Recurse into subdirectory
+                    if let Some(found) = try_find_file_recursive(&entry_path, target_filename) {
+                        return Some(found);
+                    }
+                } else if file_type.is_file() {
+                    // Check if this file matches
+                    if let Some(filename) = entry_path.file_name() {
+                        if filename == target_filename {
+                            return Some(entry_path);
+                        }
                     }
                 }
             }
