@@ -248,24 +248,26 @@ fn export_job_files(
 
     // Copy master
     let master_out = master_out_dir.join(&job.master_filename);
-    if !job.master_path.exists() {
-        eprintln!(
-            "Warning: master file {} does not exist, skipping.",
-            job.master_path.display()
-        );
-        return Ok(io_stats);
-    }
-    let copied_master = copy_file_with_throttle(&job.master_path, &master_out, io_throttle)
-        .map_err(|e| {
+    let copied_master = match copy_file_with_throttle(&job.master_path, &master_out, io_throttle) {
+        Ok(stats) => stats,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             eprintln!(
-            "Error copying master file:\n  Source: {}\n  Dest:   {}\n  Error:  {} (os error: {:?})",
-            job.master_path.display(),
-            master_out.display(),
-            e,
-            e.raw_os_error()
-        );
-            e
-        })?;
+                "Warning: master file {} does not exist, skipping.",
+                job.master_path.display()
+            );
+            return Ok(io_stats);
+        }
+        Err(e) => {
+            eprintln!(
+                "Error copying master file:\n  Source: {}\n  Dest:   {}\n  Error:  {} (os error: {:?})",
+                job.master_path.display(),
+                master_out.display(),
+                e,
+                e.raw_os_error()
+            );
+            return Err(e);
+        }
+    };
     io_stats.add(copied_master);
 
     // Write master XMP sidecar (same basename, .xmp extension)
@@ -346,40 +348,34 @@ fn export_job_files(
     io_stats.add(master_sidecar_stats);
 
     // Copy versions and write their sidecars
+    let version_out_dir = master_out_dir.clone();
+    fs::create_dir_all(&version_out_dir).map_err(|e| {
+        eprintln!(
+            "Error creating version output directory:\n  Path:  {}\n  Error: {} (os error: {:?})",
+            version_out_dir.display(),
+            e,
+            e.raw_os_error()
+        );
+        e
+    })?;
+    let master_canonical_path = job.master_path.canonicalize().ok();
+
     for ((src, dest_name), version_uuid) in job
         .version_paths
         .iter()
         .zip(&job.version_filenames)
         .zip(&job.version_uuids)
     {
-        if !src.exists() {
-            eprintln!(
-                "Warning: version file {} does not exist, skipping.",
-                src.display()
-            );
-            continue;
-        }
-
         // Check if version file is the same as master file (metadata-only version)
-        let is_same_as_master = match (src.canonicalize(), job.master_path.canonicalize()) {
-            (Ok(v), Ok(m)) => v == m,
-            _ => {
-                // If canonicalize fails, fall back to simple path comparison
-                src == &job.master_path
-            }
+        let is_same_as_master = if src == &job.master_path {
+            true
+        } else if let Some(ref master_canonical) = master_canonical_path {
+            src.canonicalize()
+                .map(|version_canonical| version_canonical == *master_canonical)
+                .unwrap_or(false)
+        } else {
+            false
         };
-
-        // Place version in the same subdirectory as the master (unified output tree)
-        let version_out_dir = master_out_dir.clone();
-        fs::create_dir_all(&version_out_dir).map_err(|e| {
-            eprintln!(
-                "Error creating version output directory:\n  Path:  {}\n  Error: {} (os error: {:?})",
-                version_out_dir.display(),
-                e,
-                e.raw_os_error()
-            );
-            e
-        })?;
 
         let dest = version_out_dir.join(dest_name);
 
@@ -393,17 +389,27 @@ fn export_job_files(
             // We'll still create the XMP sidecar below
         } else {
             eprintln!("  Version {} (separate rendered image)", version_uuid);
-            let copied_version = copy_file_with_throttle(src, &dest, io_throttle).map_err(|e| {
-                eprintln!(
-                    "Error copying version file:\n  Version UUID: {}\n  Source: {}\n  Dest:   {}\n  Error:  {} (os error: {:?})",
-                    version_uuid,
-                    src.display(),
-                    dest.display(),
-                    e,
-                    e.raw_os_error()
-                );
-                e
-            })?;
+            let copied_version = match copy_file_with_throttle(src, &dest, io_throttle) {
+                Ok(stats) => stats,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    eprintln!(
+                        "Warning: version file {} does not exist, skipping.",
+                        src.display()
+                    );
+                    continue;
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Error copying version file:\n  Version UUID: {}\n  Source: {}\n  Dest:   {}\n  Error:  {} (os error: {:?})",
+                        version_uuid,
+                        src.display(),
+                        dest.display(),
+                        e,
+                        e.raw_os_error()
+                    );
+                    return Err(e);
+                }
+            };
             io_stats.add(copied_version);
         }
 

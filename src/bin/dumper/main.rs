@@ -133,17 +133,25 @@ impl LibraryCache {
         library.load_versions::<fn(u64) -> bool>(None); // dummy closure type to make rust stop complaining
 
         let versions = library.versions();
+        let mut pb = ProgressBar::on(stderr(), versions.len() as u64);
+        pb.message("Materializing versions map: ");
+        pb.set_max_refresh_rate(Some(std::time::Duration::from_millis(100)));
         let mut version_map = HashMap::new();
         for version_uuid in versions {
             if let Some(StoreWrapper::Version(version)) = library.get(version_uuid) {
                 version_map.insert(version_uuid.to_owned(), (**version).clone());
             }
+            pb.inc();
         }
+        pb.finish();
+        println!("Version cache ready ({} entries)", version_map.len());
 
         println!("Building master cache...");
         library.load_masters(PROGRESS_NONE);
         let masters = library.masters();
         let mut pb = ProgressBar::on(stderr(), masters.len() as u64);
+        pb.message("Materializing masters map: ");
+        pb.set_max_refresh_rate(Some(std::time::Duration::from_millis(100)));
         let mut master_map = HashMap::new();
         for master_uuid in masters {
             if let Some(StoreWrapper::Master(master)) = library.get(master_uuid) {
@@ -152,11 +160,14 @@ impl LibraryCache {
             pb.inc();
         }
         pb.finish();
+        println!("Master cache ready ({} entries)", master_map.len());
 
         println!("Building album cache...");
         library.load_albums(PROGRESS_NONE);
         let albums = library.albums();
         let mut pb = ProgressBar::on(stderr(), albums.len() as u64);
+        pb.message("Materializing albums map: ");
+        pb.set_max_refresh_rate(Some(std::time::Duration::from_millis(100)));
         let mut album_map = HashMap::new();
         for album_uuid in albums {
             if let Some(StoreWrapper::Album(album)) = library.get(album_uuid) {
@@ -165,11 +176,14 @@ impl LibraryCache {
             pb.inc();
         }
         pb.finish();
+        println!("Album cache ready ({} entries)", album_map.len());
 
         println!("Building folder cache...");
         library.load_folders(PROGRESS_NONE);
         let folders = library.folders();
         let mut pb = ProgressBar::on(stderr(), folders.len() as u64);
+        pb.message("Materializing folders map: ");
+        pb.set_max_refresh_rate(Some(std::time::Duration::from_millis(100)));
         let mut folder_map = HashMap::new();
         for folder_uuid in folders {
             if let Some(StoreWrapper::Folder(folder)) = library.get(folder_uuid) {
@@ -178,6 +192,7 @@ impl LibraryCache {
             pb.inc();
         }
         pb.finish();
+        println!("Folder cache ready ({} entries)", folder_map.len());
 
         let cache = Self {
             version_map,

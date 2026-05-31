@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::stderr;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use once_cell::unsync::OnceCell;
 use pbr::ProgressBar;
@@ -251,7 +252,7 @@ impl Library {
     fn resolve_subdir(&self, subdir: &str) -> Option<PathBuf> {
         // First, try Database/<subdir>
         let db_path = self.build_path(&format!("Database/{}", subdir), true);
-        if db_path.exists() && db_path.is_dir() {
+        if fs::read_dir(&db_path).is_ok() {
             return Some(db_path);
         } else {
             eprintln!(
@@ -261,7 +262,7 @@ impl Library {
         }
         // Fallback: try top-level <subdir>
         let top_path = self.build_path(subdir, true);
-        if top_path.exists() && top_path.is_dir() {
+        if fs::read_dir(&top_path).is_ok() {
             eprintln!(
                 "Debug: Using top-level {} directory at {:?}.",
                 subdir, top_path
@@ -286,8 +287,8 @@ impl Library {
         }
         for entry in entries.unwrap() {
             if let Ok(entry) = entry {
-                if let Ok(meta) = entry.metadata() {
-                    if meta.is_dir() {
+                if let Ok(file_type) = entry.file_type() {
+                    if file_type.is_dir() {
                         if level == 0 {
                             list.push(entry.path());
                         } else {
@@ -305,19 +306,67 @@ impl Library {
         list
     }
 
+    /// Recursively list directories up to a certain depth and emit periodic status.
+    fn recurse_list_directory_with_status(path: &Path, level: i32, label: &str) -> Vec<PathBuf> {
+        let mut list: Vec<PathBuf> = Vec::new();
+        let mut stack: Vec<(PathBuf, i32)> = vec![(path.to_path_buf(), level)];
+        let mut dirs_visited: u64 = 0;
+        let mut last_report = Instant::now();
+
+        while let Some((dir_path, depth_left)) = stack.pop() {
+            dirs_visited += 1;
+            if last_report.elapsed() >= std::time::Duration::from_secs(2) {
+                eprintln!("{}: visited {} directories...", label, dirs_visited);
+                last_report = Instant::now();
+            }
+
+            let entries = fs::read_dir(&dir_path);
+            if entries.is_err() {
+                eprintln!("Warning: failed to read directory {:?}", dir_path);
+                continue;
+            }
+
+            for entry in entries.unwrap() {
+                if let Ok(entry) = entry {
+                    if let Ok(file_type) = entry.file_type() {
+                        if file_type.is_dir() {
+                            if depth_left == 0 {
+                                list.push(entry.path());
+                            } else {
+                                stack.push((entry.path(), depth_left - 1));
+                            }
+                        }
+                    } else {
+                        eprintln!("Warning: failed to get metadata for {:?}", entry.path());
+                    }
+                } else {
+                    eprintln!("Warning: failed to read entry in {:?}", dir_path);
+                }
+            }
+        }
+
+        eprintln!(
+            "{}: completed; visited {} directories, found {} leaf directories.",
+            label,
+            dirs_visited,
+            list.len()
+        );
+        list
+    }
+
     /// List items in Albums or Folders, using robust path resolution
     fn list_items_dirs(&self, subdir: &str) -> Vec<PathBuf> {
         let mut result = Vec::new();
         if let Some(ppath) = self.resolve_subdir(subdir) {
-            let meta = fs::metadata(&ppath);
-            if meta.is_err() || !meta.unwrap().is_dir() {
-                eprintln!(
-                    "Warning: directory {:?} does not exist or is not a directory.",
-                    ppath
+            if subdir == VERSIONS_BASE_DIR {
+                result = Library::recurse_list_directory_with_status(
+                    &ppath,
+                    4,
+                    "Scanning version directories",
                 );
-                return Vec::new();
+            } else {
+                result = Library::recurse_list_directory(&ppath, 4);
             }
-            result = Library::recurse_list_directory(&ppath, 4);
         }
         result
     }
@@ -399,16 +448,23 @@ impl Library {
     }
 
     pub fn list_recursive_items(&self, dir: &str, ext: &str) -> Vec<PathBuf> {
+        let is_versions_scan = dir == VERSIONS_BASE_DIR;
         let list = self.list_items_dirs(dir);
         let mut items = Vec::new();
+        let mut processed_dirs: u64 = 0;
+        let mut last_report = Instant::now();
 
         for dir in list {
-            let meta = fs::metadata(&dir);
-            if meta.is_err() || !meta.unwrap().is_dir() {
-                eprintln!("Warning: directory {:?} does not exist or is not a directory.", dir);
-                continue;
+            processed_dirs += 1;
+            if is_versions_scan && last_report.elapsed() >= std::time::Duration::from_secs(2) {
+                eprintln!(
+                    "Indexing version files: scanned {} directories, found {} .{} files so far...",
+                    processed_dirs,
+                    items.len(),
+                    ext
+                );
+                last_report = Instant::now();
             }
-
             let entries = fs::read_dir(&dir);
             if entries.is_err() {
                 eprintln!("Warning: failed to read directory {:?}", dir);
@@ -426,6 +482,15 @@ impl Library {
                     eprintln!("Warning: failed to read entry in {:?}", dir);
                 }
             }
+        }
+
+        if is_versions_scan {
+            eprintln!(
+                "Indexing version files: completed; scanned {} directories, found {} .{} files.",
+                processed_dirs,
+                items.len(),
+                ext
+            );
         }
 
         items
