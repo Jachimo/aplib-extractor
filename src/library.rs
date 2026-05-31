@@ -402,14 +402,15 @@ impl Library {
                 if store {
                     self.store(T::wrap(obj));
                 }
+            } else {
+                if audit {
+                    self.auditor
+                        .as_mut()
+                        .unwrap()
+                        .skip(&file.to_string_lossy(), SkipReason::ParseFailed);
+                }
+                eprintln!("Failed to decode object from {file:?}");
             }
-            if audit {
-                self.auditor
-                    .as_mut()
-                    .unwrap()
-                    .skip(&file.to_string_lossy(), SkipReason::ParseFailed);
-            }
-            println!("Failed to decode object from {file:?}");
             if let Some(pg) = pg.as_mut() {
                 if !pg(1) {
                     println!("Cancelled");
@@ -567,7 +568,7 @@ impl Library {
         }
     }
 
-    fn load_versions_items<T, F, P>(
+    fn load_versions_items<T, P>(
         &mut self,
         ext: &str,
         set: &mut HashSet<String>,
@@ -575,7 +576,6 @@ impl Library {
     )
     where
         T: PlistLoadable + AplibObject,
-        F: FnMut(u64) -> bool,
         P: FnMut(u64) -> bool,
     {
         println!("Scanning version directories (this may take a while on large libraries)...");
@@ -635,7 +635,7 @@ impl Library {
     pub fn load_versions<P: FnMut(u64) -> bool>(&mut self, pg: Option<P>) {
         if self.versions.is_empty() {
             let mut versions: HashSet<String> = HashSet::new();
-            self.load_versions_items::<Version, P, P>("apversion", &mut versions, pg);
+            self.load_versions_items::<Version, P>("apversion", &mut versions, pg);
             self.versions = versions;
         }
     }
@@ -644,7 +644,7 @@ impl Library {
     pub fn load_masters<F: FnMut(u64) -> bool>(&mut self, pg: Option<F>) {
         if self.masters.is_empty() {
             let mut masters: HashSet<String> = HashSet::new();
-            self.load_versions_items::<Master, F, F>("apmaster", &mut masters, pg);
+            self.load_versions_items::<Master, F>("apmaster", &mut masters, pg);
             self.masters = masters;
         }
     }

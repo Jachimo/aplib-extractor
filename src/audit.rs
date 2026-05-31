@@ -136,10 +136,10 @@ impl Report {
             plist_keys.difference(&known_keys).cloned().collect()
         };
         for key in ignored_keys {
-            if ns.is_none() {
+            if let Some(ns) = ns {
+                let key = format!("{}.{}", ns, key);
                 self.ignore(&key);
             } else {
-                let key = format!("{}.{}", ns.as_ref().unwrap(), key);
                 self.ignore(&key);
             }
         }

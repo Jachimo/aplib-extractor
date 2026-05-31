@@ -14,7 +14,6 @@ use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand};
 use num_traits::ToPrimitive;
 use pbr::ProgressBar;
-use serde_json;
 
 use aplib::audit::{Report, Reporter};
 use aplib::AplibObject;
@@ -130,7 +129,7 @@ impl LibraryCache {
         // Build cache with progress bars
         println!("Building version cache...");
 
-        library.load_versions::<fn(u64) -> bool>(None); // dummy closure type to make rust stop complaining
+        library.load_versions(PROGRESS_NONE);
 
         let versions = library.versions();
         let mut pb = ProgressBar::on(stderr(), versions.len() as u64);

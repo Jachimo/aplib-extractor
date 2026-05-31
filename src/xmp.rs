@@ -113,10 +113,7 @@ pub fn sanitize_for_xmp(value: &str) -> String {
                 return false;
             }
             // Remove other illegal XML characters (control characters except whitespace)
-            match *c {
-                '\x01'..='\x08' | '\x0B'..='\x0C' | '\x0E'..='\x1F' | '\x7F' => false,
-                _ => true,
-            }
+            !matches!(*c, '\x01'..='\x08' | '\x0B'..='\x0C' | '\x0E'..='\x1F' | '\x7F')
         })
         .collect()
 }

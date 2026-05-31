@@ -21,13 +21,3 @@ pub fn get_test_file_path(filename: &str) -> PathBuf {
     path
 }
 
-/// Return the path to the test library bundle root
-pub fn get_test_library_path() -> PathBuf {
-    let mut path = PathBuf::from(file!());
-    // go up two directories
-    path.pop();
-    path.pop();
-    path.push("testdata");
-    path.push("TestLibrary.aplibrary");
-    path
-}

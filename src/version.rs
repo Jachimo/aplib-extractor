@@ -254,8 +254,6 @@ fn dict_to_btreemap(dict: Option<plist::Dictionary>) -> Option<std::collections:
 #[test]
 fn test_version_parse() {
     use crate::testutils;
-    use crate::xmp;
-    use exempi2;
 
     let version = Version::from_path(
         testutils::get_test_file_path(
@@ -282,7 +280,7 @@ fn test_version_parse() {
 
     let result = version.to_xmp(&mut xmp);
     assert!(result);
-    
+
     // Just verify XMP was created successfully
     // (The test data is minimal and doesn't have all the properties from the original test)
 }
