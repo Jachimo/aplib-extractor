@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2025 by Github User @Jachimo 
+ * Copyright (C) 2025 by Github User @Jachimo
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -8,15 +8,17 @@
 
 use serde::Serialize;
 use std::fs;
-use std::io::Write;
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, Instant};
 
-use crate::Library;
 use super::LibraryCache;
+use crate::Library;
 
 use exempi2::SerialFlags;
 //use crate::exporter::ns; // for custom XMP namespace addition
-use aplib::xmp::{ToXmp, XmpProperty, ns};
+use aplib::xmp::{ns, ToXmp, XmpProperty};
 
 #[derive(Debug, Serialize)]
 pub struct ExportJob {
@@ -30,6 +32,197 @@ pub struct ExportJob {
     // Removed: pub sidecar_filename: String,
 }
 
+#[derive(Clone, Debug)]
+struct IoThrottle {
+    max_read_bytes_per_sec: Option<u64>,
+    max_write_bytes_per_sec: Option<u64>,
+    operation_delay: Duration,
+    chunk_size: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct IoStats {
+    read_bytes: u64,
+    written_bytes: u64,
+    elapsed: Duration,
+}
+
+impl IoStats {
+    fn add(&mut self, other: IoStats) {
+        self.read_bytes += other.read_bytes;
+        self.written_bytes += other.written_bytes;
+        self.elapsed += other.elapsed;
+    }
+
+    fn mibps(&self) -> f64 {
+        let secs = self.elapsed.as_secs_f64();
+        if secs <= 0.0 {
+            0.0
+        } else {
+            (self.written_bytes as f64 / (1024.0 * 1024.0)) / secs
+        }
+    }
+}
+
+impl IoThrottle {
+    fn from_args(args: &super::ExportArgs) -> Self {
+        let max_write_mib_per_sec = args
+            .max_write_mib_per_sec
+            .or_else(|| args.nas_safe.then_some(4.0));
+        let max_read_mib_per_sec = args
+            .max_read_mib_per_sec
+            .or_else(|| args.nas_safe.then_some(4.0));
+
+        let max_write_bytes_per_sec = max_write_mib_per_sec.and_then(|mib| {
+            if mib <= 0.0 {
+                None
+            } else {
+                Some((mib * 1024.0 * 1024.0) as u64)
+            }
+        });
+        let max_read_bytes_per_sec = max_read_mib_per_sec.and_then(|mib| {
+            if mib <= 0.0 {
+                None
+            } else {
+                Some((mib * 1024.0 * 1024.0) as u64)
+            }
+        });
+
+        let delay_ms = args
+            .io_delay_ms
+            .or_else(|| args.nas_safe.then_some(20))
+            .unwrap_or(0);
+
+        let chunk_kib = args
+            .io_chunk_kib
+            .or_else(|| args.nas_safe.then_some(64))
+            .unwrap_or(256)
+            .max(1);
+
+        Self {
+            max_read_bytes_per_sec,
+            max_write_bytes_per_sec,
+            operation_delay: Duration::from_millis(delay_ms),
+            chunk_size: chunk_kib * 1024,
+        }
+    }
+
+    fn describe(&self) -> String {
+        let read_rate = self
+            .max_read_bytes_per_sec
+            .map(|v| format!("{:.2} MiB/s", v as f64 / (1024.0 * 1024.0)))
+            .unwrap_or_else(|| "unlimited".to_string());
+        let write_rate = self
+            .max_write_bytes_per_sec
+            .map(|v| format!("{:.2} MiB/s", v as f64 / (1024.0 * 1024.0)))
+            .unwrap_or_else(|| "unlimited".to_string());
+
+        format!(
+            "read={}, write={}, delay={}ms, chunk={} KiB",
+            read_rate,
+            write_rate,
+            self.operation_delay.as_millis(),
+            self.chunk_size / 1024
+        )
+    }
+
+    fn sleep_for_read_rate(&self, bytes_read: u64, started_at: Instant) {
+        if let Some(max_bps) = self.max_read_bytes_per_sec {
+            if max_bps == 0 {
+                return;
+            }
+            let target_secs = bytes_read as f64 / max_bps as f64;
+            let target_elapsed = Duration::from_secs_f64(target_secs);
+            let actual_elapsed = started_at.elapsed();
+            if target_elapsed > actual_elapsed {
+                thread::sleep(target_elapsed - actual_elapsed);
+            }
+        }
+    }
+
+    fn sleep_for_write_rate(&self, bytes_written: u64, started_at: Instant) {
+        if let Some(max_bps) = self.max_write_bytes_per_sec {
+            if max_bps == 0 {
+                return;
+            }
+            let target_secs = bytes_written as f64 / max_bps as f64;
+            let target_elapsed = Duration::from_secs_f64(target_secs);
+            let actual_elapsed = started_at.elapsed();
+            if target_elapsed > actual_elapsed {
+                thread::sleep(target_elapsed - actual_elapsed);
+            }
+        }
+    }
+
+    fn sleep_between_operations(&self) {
+        if !self.operation_delay.is_zero() {
+            thread::sleep(self.operation_delay);
+        }
+    }
+}
+
+fn copy_file_with_throttle(
+    src: &Path,
+    dest: &Path,
+    throttle: &IoThrottle,
+) -> std::io::Result<IoStats> {
+    let src_file = fs::File::open(src)?;
+    let dest_file = fs::File::create(dest)?;
+
+    let mut reader = BufReader::with_capacity(throttle.chunk_size, src_file);
+    let mut writer = BufWriter::with_capacity(throttle.chunk_size, dest_file);
+    let mut buf = vec![0_u8; throttle.chunk_size];
+    let mut total_read: u64 = 0;
+    let mut total_written: u64 = 0;
+    let started_at = Instant::now();
+
+    loop {
+        let bytes_read = reader.read(&mut buf)?;
+        if bytes_read == 0 {
+            break;
+        }
+        total_read += bytes_read as u64;
+        throttle.sleep_for_read_rate(total_read, started_at);
+        writer.write_all(&buf[..bytes_read])?;
+        total_written += bytes_read as u64;
+        throttle.sleep_for_write_rate(total_written, started_at);
+    }
+
+    writer.flush()?;
+    throttle.sleep_between_operations();
+    Ok(IoStats {
+        read_bytes: total_read,
+        written_bytes: total_written,
+        elapsed: started_at.elapsed(),
+    })
+}
+
+fn write_sidecar_with_throttle(
+    path: &Path,
+    content: &[u8],
+    throttle: &IoThrottle,
+) -> std::io::Result<IoStats> {
+    let file = fs::File::create(path)?;
+    let mut writer = BufWriter::with_capacity(throttle.chunk_size, file);
+    let mut offset = 0;
+    let started_at = Instant::now();
+
+    while offset < content.len() {
+        let next = (offset + throttle.chunk_size).min(content.len());
+        writer.write_all(&content[offset..next])?;
+        offset = next;
+        throttle.sleep_for_write_rate(offset as u64, started_at);
+    }
+
+    writer.flush()?;
+    throttle.sleep_between_operations();
+    Ok(IoStats {
+        read_bytes: 0,
+        written_bytes: content.len() as u64,
+        elapsed: started_at.elapsed(),
+    })
+}
+
 fn export_job_files(
     job: &ExportJob,
     out_dir: &Path,
@@ -37,7 +230,9 @@ fn export_job_files(
     library_root_path: &Path,
     flat_keyword_map: &std::collections::HashMap<String, String>,
     hierarchical_keyword_map: &std::collections::HashMap<String, String>,
-) -> std::io::Result<()> {
+    io_throttle: &IoThrottle,
+) -> std::io::Result<IoStats> {
+    let mut io_stats = IoStats::default();
 
     // Create the output directory
     let master_out_dir = out_dir.join(&job.master_rel_dir);
@@ -54,19 +249,24 @@ fn export_job_files(
     // Copy master
     let master_out = master_out_dir.join(&job.master_filename);
     if !job.master_path.exists() {
-        eprintln!("Warning: master file {} does not exist, skipping.", job.master_path.display());
-        return Ok(());
-    }
-    fs::copy(&job.master_path, &master_out).map_err(|e| {
         eprintln!(
+            "Warning: master file {} does not exist, skipping.",
+            job.master_path.display()
+        );
+        return Ok(io_stats);
+    }
+    let copied_master = copy_file_with_throttle(&job.master_path, &master_out, io_throttle)
+        .map_err(|e| {
+            eprintln!(
             "Error copying master file:\n  Source: {}\n  Dest:   {}\n  Error:  {} (os error: {:?})",
             job.master_path.display(),
             master_out.display(),
             e,
             e.raw_os_error()
         );
-        e
-    })?;
+            e
+        })?;
+    io_stats.add(copied_master);
 
     // Write master XMP sidecar (same basename, .xmp extension)
     let master_sidecar = master_out.with_extension("xmp");
@@ -87,7 +287,11 @@ fn export_job_files(
                 hierarchical_keyword_map,
                 &format!("Master {}", job.master_uuid),
             );
-            master.keywords = if flat_resolved.is_empty() { None } else { Some(flat_resolved) };
+            master.keywords = if flat_resolved.is_empty() {
+                None
+            } else {
+                Some(flat_resolved)
+            };
 
             // Store hierarchical keywords in custom fields for XMP writing
             if !hierarchical_resolved.is_empty() {
@@ -103,38 +307,59 @@ fn export_job_files(
         // Populate "ApertureLibraryPath" custom metadata field from actual dir structure
         let mut custom = master.custom_aplib_fields.unwrap_or_default();
         if let Ok(rel_path) = job.master_path.strip_prefix(library_root_path) {
-            custom.insert("ApertureLibraryPath".to_string(), rel_path.to_string_lossy().to_string());
+            custom.insert(
+                "ApertureLibraryPath".to_string(),
+                rel_path.to_string_lossy().to_string(),
+            );
         } else {
-            custom.insert("ApertureLibraryPath".to_string(), job.master_path.to_string_lossy().to_string());
+            custom.insert(
+                "ApertureLibraryPath".to_string(),
+                job.master_path.to_string_lossy().to_string(),
+            );
         }
 
         // Create XMP elements from metadata fields
         master.custom_aplib_fields = Some(custom);
         if !master.to_xmp(&mut xmp) {
-            eprintln!("Warning: XMP metadata incomplete for master {}", job.master_uuid);
+            eprintln!(
+                "Warning: XMP metadata incomplete for master {}",
+                job.master_uuid
+            );
         }
     }
-    // Create and write the sidecar file 
-    let mut file = fs::File::create(&master_sidecar).map_err(|e| {
-        eprintln!(
-            "Error creating master XMP sidecar:\n  Path:  {}\n  Error: {} (os error: {:?})",
-            master_sidecar.display(),
-            e,
-            e.raw_os_error()
-        );
-        e
-    })?;
-    let xmp_string = xmp.serialize(SerialFlags::default(), 0)
+    let xmp_string = xmp
+        .serialize(SerialFlags::default(), 0)
         .unwrap_or_else(|_| exempi2::XmpString::new());
-    file.write_all(xmp_string.to_string().as_bytes())?;
+    let xmp_bytes = xmp_string.to_string();
+    let master_sidecar_stats =
+        write_sidecar_with_throttle(&master_sidecar, xmp_bytes.as_bytes(), io_throttle).map_err(
+            |e| {
+                eprintln!(
+                    "Error writing master XMP sidecar:\n  Path:  {}\n  Error: {} (os error: {:?})",
+                    master_sidecar.display(),
+                    e,
+                    e.raw_os_error()
+                );
+                e
+            },
+        )?;
+    io_stats.add(master_sidecar_stats);
 
     // Copy versions and write their sidecars
-    for ((src, dest_name), version_uuid) in job.version_paths.iter().zip(&job.version_filenames).zip(&job.version_uuids) {
+    for ((src, dest_name), version_uuid) in job
+        .version_paths
+        .iter()
+        .zip(&job.version_filenames)
+        .zip(&job.version_uuids)
+    {
         if !src.exists() {
-            eprintln!("Warning: version file {} does not exist, skipping.", src.display());
+            eprintln!(
+                "Warning: version file {} does not exist, skipping.",
+                src.display()
+            );
             continue;
         }
-        
+
         // Check if version file is the same as master file (metadata-only version)
         let is_same_as_master = match (src.canonicalize(), job.master_path.canonicalize()) {
             (Ok(v), Ok(m)) => v == m,
@@ -143,7 +368,7 @@ fn export_job_files(
                 src == &job.master_path
             }
         };
-        
+
         // Place version in the same subdirectory as the master (unified output tree)
         let version_out_dir = master_out_dir.clone();
         fs::create_dir_all(&version_out_dir).map_err(|e| {
@@ -155,17 +380,20 @@ fn export_job_files(
             );
             e
         })?;
-        
+
         let dest = version_out_dir.join(dest_name);
-        
+
         // Only copy image file if it's different from the master
         if is_same_as_master {
-            eprintln!("  Version {} (metadata-only, using master image)", version_uuid);
+            eprintln!(
+                "  Version {} (metadata-only, using master image)",
+                version_uuid
+            );
             // Don't copy the file - it's the same as the master
             // We'll still create the XMP sidecar below
         } else {
             eprintln!("  Version {} (separate rendered image)", version_uuid);
-            fs::copy(src, &dest).map_err(|e| {
+            let copied_version = copy_file_with_throttle(src, &dest, io_throttle).map_err(|e| {
                 eprintln!(
                     "Error copying version file:\n  Version UUID: {}\n  Source: {}\n  Dest:   {}\n  Error:  {} (os error: {:?})",
                     version_uuid,
@@ -176,6 +404,7 @@ fn export_job_files(
                 );
                 e
             })?;
+            io_stats.add(copied_version);
         }
 
         // Write version XMP sidecar (always, regardless of whether image was copied)
@@ -195,7 +424,11 @@ fn export_job_files(
                     hierarchical_keyword_map,
                     &format!("Version {}", version_uuid),
                 );
-                version.keywords = if flat_resolved.is_empty() { None } else { Some(flat_resolved) };
+                version.keywords = if flat_resolved.is_empty() {
+                    None
+                } else {
+                    Some(flat_resolved)
+                };
 
                 // Store hierarchical keywords in custom fields for XMP writing
                 if !hierarchical_resolved.is_empty() {
@@ -209,22 +442,36 @@ fn export_job_files(
             }
             let mut custom = version.custom_aplib_fields.unwrap_or_default();
             if let Ok(rel_path) = src.strip_prefix(library_root_path) {
-                custom.insert("ApertureLibraryPath".to_string(), rel_path.to_string_lossy().to_string());
+                custom.insert(
+                    "ApertureLibraryPath".to_string(),
+                    rel_path.to_string_lossy().to_string(),
+                );
             } else {
-                custom.insert("ApertureLibraryPath".to_string(), src.to_string_lossy().to_string());
+                custom.insert(
+                    "ApertureLibraryPath".to_string(),
+                    src.to_string_lossy().to_string(),
+                );
             }
             version.custom_aplib_fields = Some(custom);
             if !version.to_xmp(&mut xmp) {
-                eprintln!("Warning: XMP metadata incomplete for version {}", version_uuid);
+                eprintln!(
+                    "Warning: XMP metadata incomplete for version {}",
+                    version_uuid
+                );
             }
 
             // Add master reference to version's metadata
             XmpProperty::new(ns::APLIB, "MasterUUID").put_into_xmp(&job.master_uuid, &mut xmp);
-            XmpProperty::new(ns::APLIB, "MasterFilename").put_into_xmp(&job.master_filename, &mut xmp);
+            XmpProperty::new(ns::APLIB, "MasterFilename")
+                .put_into_xmp(&job.master_filename, &mut xmp);
         }
-        let mut file = fs::File::create(&version_sidecar).map_err(|e| {
+        let xmp_string = xmp
+            .serialize(SerialFlags::default(), 0)
+            .unwrap_or_else(|_| exempi2::XmpString::new());
+        let xmp_bytes = xmp_string.to_string();
+        let version_sidecar_stats = write_sidecar_with_throttle(&version_sidecar, xmp_bytes.as_bytes(), io_throttle).map_err(|e| {
             eprintln!(
-                "Error creating version XMP sidecar:\n  Version UUID: {}\n  Path:  {}\n  Error: {} (os error: {:?})",
+                "Error writing version XMP sidecar:\n  Version UUID: {}\n  Path:  {}\n  Error: {} (os error: {:?})",
                 version_uuid,
                 version_sidecar.display(),
                 e,
@@ -232,12 +479,10 @@ fn export_job_files(
             );
             e
         })?;
-        let xmp_string = xmp.serialize(SerialFlags::default(), 0)
-            .unwrap_or_else(|_| exempi2::XmpString::new());
-        file.write_all(xmp_string.to_string().as_bytes())?;
+        io_stats.add(version_sidecar_stats);
     }
 
-    Ok(())
+    Ok(io_stats)
 }
 
 pub fn get_master_root(library_abs: &Path) -> PathBuf {
@@ -256,14 +501,14 @@ pub fn get_master_root(library_abs: &Path) -> PathBuf {
 
 /// Transform a Versions directory path to the corresponding Masters directory path.
 /// Version image files are stored in the Masters tree, not in the Versions tree.
-/// 
+///
 /// Example transformation:
 /// - Input: `/path/to/Library.aplibrary/Database/Versions/2006/11/03/20061103-133939/UUID`
 /// - Output: `Masters/2006/11/03/20061103-133939`
 fn transform_versions_to_masters_path(versions_path: &Path) -> Option<PathBuf> {
     // Convert to string for easier manipulation
     let path_str = versions_path.to_str()?;
-    
+
     // Find the "Versions/" component in the path (could be absolute or relative)
     // Look for "Database/Versions/" first, then fall back to just "Versions/"
     let relative_path = if let Some(pos) = path_str.find("Database/Versions/") {
@@ -279,25 +524,25 @@ fn transform_versions_to_masters_path(versions_path: &Path) -> Option<PathBuf> {
         // Path doesn't contain "Versions/" - can't transform
         return None;
     };
-    
+
     // The relative path is now like: "2006/11/03/20061103-133939/UUID"
     // We need to remove the UUID (last component) to get: "2006/11/03/20061103-133939"
     let path_without_uuid = Path::new(relative_path);
     let parent_path = path_without_uuid.parent()?;
-    
+
     // Build the Masters path
     Some(Path::new("Masters").join(parent_path))
 }
 
 /// Search for a version image file in the Masters tree with flexible subdirectory handling.
-/// 
+///
 /// Version images may be stored:
 /// - Directly: `Masters/.../YYYYMMDD-HHMMSS/filename.jpg`
 /// - In subdirectories: `Masters/.../YYYYMMDD-HHMMSS/{subdir}/filename.jpg`
 /// - In deeply nested subdirectories: `Masters/.../YYYYMMDD-HHMMSS/Users/jtuttle/Dropbox/photos/folder/file.jpg`
-/// 
+///
 /// This function searches the timestamp directory recursively for the file.
-/// 
+///
 /// Note: Aperture metadata sometimes contains `:nopm:` (no PM/AM marker) in filenames,
 /// but actual disk files don't have this string. We try both the original filename
 /// and a version with `:nopm:` stripped.
@@ -306,7 +551,7 @@ fn find_version_image_file(masters_timestamp_dir: &Path, filename: &str) -> Opti
     if let Some(path) = try_find_file_recursive(masters_timestamp_dir, filename) {
         return Some(path);
     }
-    
+
     // If filename contains :nopm:, try again with it stripped
     // Example: "IMG_20150724_154440:nopm:.jpg" -> "IMG_20150724_154440.jpg"
     if filename.contains(":nopm:") {
@@ -315,7 +560,7 @@ fn find_version_image_file(masters_timestamp_dir: &Path, filename: &str) -> Opti
             return Some(path);
         }
     }
-    
+
     None
 }
 
@@ -328,13 +573,13 @@ fn try_find_file_recursive(dir: &Path, target_filename: &str) -> Option<PathBuf>
     if direct_path.exists() {
         return Some(direct_path);
     }
-    
+
     // Recursively search subdirectories
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             if let Ok(file_type) = entry.file_type() {
                 let entry_path = entry.path();
-                
+
                 if file_type.is_dir() {
                     // Recurse into subdirectory
                     if let Some(found) = try_find_file_recursive(&entry_path, target_filename) {
@@ -351,16 +596,15 @@ fn try_find_file_recursive(dir: &Path, target_filename: &str) -> Option<PathBuf>
             }
         }
     }
-    
+
     None
 }
-
 
 /// DEPRECATED: This function is a last-resort fallback for when Version.source_directory is None.
 /// This only happens with old cached data. The function cannot reliably locate version files
 /// because it lacks the timestamp directory information (YYYYMMDD-HHMMSS) needed to construct
-/// the correct Masters path. 
-/// 
+/// the correct Masters path.
+///
 /// The correct approach is to use Version.source_directory which is captured during loading.
 /// If you see this warning, consider clearing the cache to reload fresh metadata.
 pub fn get_version_image_path(library_path: &str, version_uuid: &str, file_name: &str) -> PathBuf {
@@ -372,7 +616,7 @@ pub fn get_version_image_path(library_path: &str, version_uuid: &str, file_name:
         version_uuid
     );
     eprintln!("       Clear the cache (/tmp/aplib_cache_*.bin) and try again.");
-    
+
     // Return an obviously wrong path to ensure it fails
     Path::new(library_path)
         .join("CACHE_OUT_OF_DATE")
@@ -381,10 +625,7 @@ pub fn get_version_image_path(library_path: &str, version_uuid: &str, file_name:
 }
 
 /// Build a list of export jobs for all masters and their versions
-pub fn build_export_jobs(
-    cache: &LibraryCache,
-    library_abs: &Path,
-) -> Vec<ExportJob> {
+pub fn build_export_jobs(cache: &LibraryCache, library_abs: &Path) -> Vec<ExportJob> {
     let mut jobs = Vec::new();
     let master_root = get_master_root(library_abs);
 
@@ -393,7 +634,7 @@ pub fn build_export_jobs(
         if master.is_in_trash == Some(true) {
             continue;
         }
-        
+
         // Warn about missing files but continue processing
         if master.is_missing == Some(true) {
             eprintln!(
@@ -402,12 +643,15 @@ pub fn build_export_jobs(
             );
             // Continue anyway - the file existence check later will handle it
         }
-        
+
         // Master file info
         let image_path = match master.image_path.as_ref() {
             Some(p) => p,
             None => {
-                eprintln!("Warning: master {} has no image_path, skipping.", master_uuid);
+                eprintln!(
+                    "Warning: master {} has no image_path, skipping.",
+                    master_uuid
+                );
                 continue;
             }
         };
@@ -418,7 +662,10 @@ pub fn build_export_jobs(
 
         // The output path for the master will be out_dir/rel_path
         let master_filename = rel_path.file_name().unwrap().to_string_lossy().to_string();
-        let master_rel_dir = rel_path.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
+        let master_rel_dir = rel_path
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .to_path_buf();
 
         // Find all versions for this master
         let mut version_uuids = Vec::new();
@@ -430,23 +677,27 @@ pub fn build_export_jobs(
                 if version.is_original == Some(true) {
                     continue;
                 }
-                
+
                 version_uuids.push(version_uuid.clone());
                 let version_file = version.file_name.clone().unwrap_or_default();
-                
+
                 // Transform the source_directory path from Versions tree to Masters tree
                 let version_path = if let Some(ref source_dir) = version.source_directory {
                     // Transform: Database/Versions/.../UUID -> Masters/.../
                     if let Some(masters_dir) = transform_versions_to_masters_path(source_dir) {
                         let masters_timestamp_dir = library_abs.join(&masters_dir);
                         // Search flexibly for the file (may be in subdirectories)
-                        if let Some(found_path) = find_version_image_file(&masters_timestamp_dir, &version_file) {
+                        if let Some(found_path) =
+                            find_version_image_file(&masters_timestamp_dir, &version_file)
+                        {
                             found_path
                         } else {
                             // File not found even with flexible search
                             eprintln!(
                                 "Warning: Could not find version file '{}' for version {} in {}",
-                                version_file, version_uuid, masters_timestamp_dir.display()
+                                version_file,
+                                version_uuid,
+                                masters_timestamp_dir.display()
                             );
                             // Return a non-existent path so the later check will skip it
                             masters_timestamp_dir.join(&version_file)
@@ -471,7 +722,7 @@ pub fn build_export_jobs(
                         &version_file,
                     )
                 };
-                
+
                 let version_filename = format!(
                     "{}_version_{}{}",
                     master_uuid,
@@ -501,8 +752,8 @@ pub fn build_export_jobs(
 
 /// The main export entry point, moved from process_export in main.rs
 pub fn process_export(args: &super::ExportArgs) {
-    let library_abs = fs::canonicalize(&args.path)
-        .expect("Failed to resolve absolute path to library");
+    let library_abs =
+        fs::canonicalize(&args.path).expect("Failed to resolve absolute path to library");
 
     let mut library = Library::new(&args.path);
 
@@ -517,14 +768,15 @@ pub fn process_export(args: &super::ExportArgs) {
     );
 
     let cache_path = {
-        use std::hash::{Hasher, Hash};
         use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
         let mut hasher = DefaultHasher::new();
         args.path.hash(&mut hasher);
         let hash = hasher.finish();
         PathBuf::from(format!("/tmp/aplib_cache_{hash:x}.bin"))
     };
     let cache = LibraryCache::new_or_load(&mut library, &cache_path);
+    let io_throttle = IoThrottle::from_args(args);
 
     let out_dir = args.out_dir.as_deref().unwrap_or(".");
     let out_dir = Path::new(out_dir);
@@ -533,6 +785,8 @@ pub fn process_export(args: &super::ExportArgs) {
     } else {
         fs::create_dir_all(out_dir).expect("Failed to create output directory");
     }
+
+    eprintln!("Export I/O throttle settings: {}", io_throttle.describe());
 
     // Create custom namespaces for non-standard XMP fields
     let _ = exempi2::register_namespace(ns::APLIB, "aplib");
@@ -544,25 +798,50 @@ pub fn process_export(args: &super::ExportArgs) {
 
     let jobs = build_export_jobs(&cache, &library_abs);
     println!("Prepared {} export jobs (one per master).", jobs.len());
+    let mut total_io = IoStats::default();
 
-    for job in &jobs {
+    for (idx, job) in jobs.iter().enumerate() {
         println!(
             "Exporting master {} and {} versions...",
             job.master_uuid,
             job.version_uuids.len()
         );
         if !args.dryrun {
-            if let Err(e) = export_job_files(
+            match export_job_files(
                 job,
                 out_dir,
                 &cache,
                 &library_abs,
                 &flat_keyword_map,
                 &hierarchical_keyword_map,
+                &io_throttle,
             ) {
-                eprintln!("Failed to export {}: {}", job.master_uuid, e);
+                Ok(job_io) => {
+                    total_io.add(job_io);
+                    println!(
+                        "I/O progress {}/{}: wrote {:.2} MiB in {:.2}s ({:.2} MiB/s effective)",
+                        idx + 1,
+                        jobs.len(),
+                        job_io.written_bytes as f64 / (1024.0 * 1024.0),
+                        job_io.elapsed.as_secs_f64(),
+                        job_io.mibps(),
+                    );
+                }
+                Err(e) => {
+                    eprintln!("Failed to export {}: {}", job.master_uuid, e);
+                }
             }
         }
+    }
+
+    if !args.dryrun {
+        println!(
+            "Export I/O summary: read {:.2} MiB, wrote {:.2} MiB in {:.2}s ({:.2} MiB/s effective)",
+            total_io.read_bytes as f64 / (1024.0 * 1024.0),
+            total_io.written_bytes as f64 / (1024.0 * 1024.0),
+            total_io.elapsed.as_secs_f64(),
+            total_io.mibps(),
+        );
     }
 }
 
@@ -570,10 +849,30 @@ pub fn process_export(args: &super::ExportArgs) {
 mod tests {
     use super::*;
 
+    fn make_export_args() -> super::super::ExportArgs {
+        super::super::ExportArgs {
+            all: false,
+            albums: false,
+            folders: false,
+            masters: false,
+            versions: false,
+            out_dir: None,
+            dryrun: false,
+            debug: false,
+            nas_safe: false,
+            max_write_mib_per_sec: None,
+            max_read_mib_per_sec: None,
+            io_delay_ms: None,
+            io_chunk_kib: None,
+            path: String::from("/tmp/library.aplibrary"),
+        }
+    }
+
     #[test]
     fn test_transform_versions_to_masters_path() {
         // Test with Database/Versions prefix (relative path)
-        let input = Path::new("Database/Versions/2006/11/03/20061103-133939/7KRjR0TQSZedV48EWiDYyA");
+        let input =
+            Path::new("Database/Versions/2006/11/03/20061103-133939/7KRjR0TQSZedV48EWiDYyA");
         let expected = PathBuf::from("Masters/2006/11/03/20061103-133939");
         let result = transform_versions_to_masters_path(input);
         assert_eq!(result, Some(expected));
@@ -606,5 +905,49 @@ mod tests {
         let result = transform_versions_to_masters_path(input);
         // Should return Some but with just the year
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_io_throttle_nas_safe_defaults() {
+        let mut args = make_export_args();
+        args.nas_safe = true;
+
+        let throttle = IoThrottle::from_args(&args);
+        assert_eq!(throttle.max_read_bytes_per_sec, Some(4 * 1024 * 1024));
+        assert_eq!(throttle.max_write_bytes_per_sec, Some(4 * 1024 * 1024));
+        assert_eq!(throttle.operation_delay, Duration::from_millis(20));
+        assert_eq!(throttle.chunk_size, 64 * 1024);
+    }
+
+    #[test]
+    fn test_io_throttle_explicit_overrides() {
+        let mut args = make_export_args();
+        args.nas_safe = true;
+        args.max_read_mib_per_sec = Some(1.5);
+        args.max_write_mib_per_sec = Some(2.5);
+        args.io_delay_ms = Some(75);
+        args.io_chunk_kib = Some(32);
+
+        let throttle = IoThrottle::from_args(&args);
+        assert_eq!(
+            throttle.max_read_bytes_per_sec,
+            Some((1.5 * 1024.0 * 1024.0) as u64)
+        );
+        assert_eq!(
+            throttle.max_write_bytes_per_sec,
+            Some((2.5 * 1024.0 * 1024.0) as u64)
+        );
+        assert_eq!(throttle.operation_delay, Duration::from_millis(75));
+        assert_eq!(throttle.chunk_size, 32 * 1024);
+    }
+
+    #[test]
+    fn test_iostats_mibps() {
+        let stats = IoStats {
+            read_bytes: 1024,
+            written_bytes: 2 * 1024 * 1024,
+            elapsed: Duration::from_secs(2),
+        };
+        assert!((stats.mibps() - 1.0).abs() < 0.0001);
     }
 }

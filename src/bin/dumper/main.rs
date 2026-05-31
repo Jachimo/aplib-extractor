@@ -80,10 +80,20 @@ struct ExportArgs {
     dryrun: bool,
     #[arg(long)]
     debug: bool,
+    #[arg(long)]
+    nas_safe: bool,
+    #[arg(long, value_name = "MIB_PER_SEC")]
+    max_write_mib_per_sec: Option<f64>,
+    #[arg(long, value_name = "MIB_PER_SEC")]
+    max_read_mib_per_sec: Option<f64>,
+    #[arg(long, value_name = "MILLISECONDS")]
+    io_delay_ms: Option<u64>,
+    #[arg(long, value_name = "KIB")]
+    io_chunk_kib: Option<usize>,
     path: String,
 }
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
 struct LibraryCache {
@@ -111,7 +121,10 @@ impl LibraryCache {
                 }
             }
         } else {
-            println!("No cache found at {}, building cache...", cache_path.display());
+            println!(
+                "No cache found at {}, building cache...",
+                cache_path.display()
+            );
         }
 
         // Build cache with progress bars
@@ -357,8 +370,8 @@ fn process_dump(args: &Args) {
         // Use a cache file (in /tmp or similar), based on library path hash
         // This is to make life bearable if the Aperture library is on a network share
         let cache_path = {
-            use std::hash::{Hasher, Hash};
             use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
             let mut hasher = DefaultHasher::new();
             args.path.hash(&mut hasher);
             let hash = hasher.finish();
@@ -376,7 +389,8 @@ fn process_dump(args: &Args) {
         }
 
         let model_info = library.get_model_info().unwrap();
-        let library_abs = fs::canonicalize(&args.path).expect("Failed to resolve absolute path to library");
+        let library_abs =
+            fs::canonicalize(&args.path).expect("Failed to resolve absolute path to library");
 
         println!("model info");
         println!("\tDB version: {}", model_info.db_version.unwrap_or(0));
@@ -460,9 +474,7 @@ fn dump_volumes(library: &mut Library) {
                 let uuid = volume.uuid().as_ref().unwrap();
                 let disk_uuid = volume.disk_uuid.clone().unwrap_or_default();
                 let model_id = volume.model_id();
-                println!(
-                    "| {name:<22} | {uuid:<22} | {disk_uuid:<36} | {model_id:>4} |",
-                )
+                println!("| {name:<22} | {uuid:<22} | {disk_uuid:<36} | {model_id:>4} |",)
             }
             _ => {
                 println!("Folder not found.");
@@ -564,7 +576,12 @@ fn dump_albums(library: &mut Library, cache: &LibraryCache) {
     }
 }
 
-fn dump_masters(model_info: &ModelInfo, library: &mut Library, library_abs: &Path, cache: &LibraryCache) {
+fn dump_masters(
+    model_info: &ModelInfo,
+    library: &mut Library,
+    library_abs: &Path,
+    cache: &LibraryCache,
+) {
     let count = model_info.master_count.unwrap_or(0) as u64;
     let mut pb = ProgressBar::on(stderr(), count);
 
@@ -635,4 +652,3 @@ fn dump_versions(model_info: &ModelInfo, cache: &LibraryCache) {
         }
     }
 }
-

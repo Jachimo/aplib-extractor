@@ -73,9 +73,15 @@ Commands and Options:
   Export images to the working directory.
   - `--out-dir DIR` Output directory (default: current directory).
   - `--dryrun`      Print shell commands for file operations instead of performing them.
+  - `--nas-safe`    Apply conservative read/write settings for slow/fragile network storage.
+  - `--max-read-mib-per-sec N` Limit source read throughput during export (MiB/s).
+  - `--max-write-mib-per-sec N` Limit write throughput during export (MiB/s).
+  - `--io-delay-ms N` Sleep N milliseconds after each file/sidecar write operation.
+  - `--io-chunk-kib N` Chunk size for copy/write loops (smaller chunks reduce burstiness).
 
 Notes:
 - `<LIBRARY_PATH>` is the path to the Aperture library bundle.
+- Export logs now include per-job and aggregate effective throughput (MiB/s) to make NAS tuning easier.
 - There is no guarantee that a rendered version exists for each Master image.
   Photos may lack versions because they were never rendered into a Preview, or if
   the library was cleaned.
