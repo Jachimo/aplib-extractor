@@ -854,3 +854,57 @@ impl Library {
         self.masters = masters;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Library;
+    use crate::master::Master;
+    use crate::store;
+    use crate::AplibObject;
+    use crate::PlistLoadable;
+
+    fn fixture_path(rel: &str) -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata")
+            .join("TestLibrary.aplibrary")
+            .join(rel)
+    }
+
+    #[test]
+    fn test_resolve_master_path_missing_image_path_returns_none() {
+        let mut library = Library::new("/tmp/test.aplibrary");
+        let mut master = Master::from_path(
+            fixture_path("Database/Versions/2006/11/02/20061102-161812/V6jjzYNdSVu006MPsZkt5w/Master.apmaster"),
+            None,
+        )
+        .expect("fixture master should parse");
+
+        let uuid = master.uuid().clone().expect("fixture master should have uuid");
+        master.image_path = None;
+        assert!(library.store(store::Wrapper::Master(Box::new(master))));
+
+        assert_eq!(library.resolve_master_path(&uuid), None);
+    }
+
+    #[test]
+    fn test_resolve_master_path_with_relative_library_path() {
+        let mut library = Library::new("/tmp/test.aplibrary");
+        let master = Master::from_path(
+            fixture_path("Database/Versions/2006/11/02/20061102-161812/V6jjzYNdSVu006MPsZkt5w/Master.apmaster"),
+            None,
+        )
+        .expect("fixture master should parse");
+
+        let uuid = master.uuid().clone().expect("fixture master should have uuid");
+        let image_path = master
+            .image_path
+            .clone()
+            .expect("fixture master should have image_path");
+        assert!(library.store(store::Wrapper::Master(Box::new(master))));
+
+        assert_eq!(
+            library.resolve_master_path(&uuid),
+            Some(format!("Masters/{image_path}"))
+        );
+    }
+}

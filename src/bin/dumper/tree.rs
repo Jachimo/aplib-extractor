@@ -148,3 +148,17 @@ pub(crate) fn process_tree(args: &TreeArgs) {
     println!("TOP LEVEL");
     print_children_for(TOP_LEVEL, &tree, &library, args.skip_masters, 2);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_print_children_for_missing_child_does_not_panic() {
+        let mut tree = Tree::new();
+        tree.insert(TOP_LEVEL.to_string(), vec!["missing-child".to_string()]);
+
+        let library = Library::new("/tmp/nonexistent.aplibrary");
+        print_children_for(TOP_LEVEL, &tree, &library, false, 0);
+    }
+}

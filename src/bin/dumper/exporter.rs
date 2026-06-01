@@ -872,6 +872,36 @@ pub fn process_export(args: &super::ExportArgs) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
+    use aplib::{AplibObject, Master, PlistLoadable, Version};
+
+    fn fixture_path(rel: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata")
+            .join("TestLibrary.aplibrary")
+            .join(rel)
+    }
+
+    fn fixture_master() -> Master {
+        Master::from_path(
+            fixture_path(
+                "Database/Versions/2006/11/02/20061102-161812/V6jjzYNdSVu006MPsZkt5w/Master.apmaster",
+            ),
+            None,
+        )
+        .expect("fixture master should parse")
+    }
+
+    fn fixture_version() -> Version {
+        Version::from_path(
+            fixture_path(
+                "Database/Versions/2006/11/02/20061102-161812/V6jjzYNdSVu006MPsZkt5w/Version-0.apversion",
+            ),
+            None,
+        )
+        .expect("fixture version should parse")
+    }
 
     fn make_export_args() -> super::super::ExportArgs {
         super::super::ExportArgs {
@@ -973,5 +1003,74 @@ mod tests {
             elapsed: Duration::from_secs(2),
         };
         assert!((stats.mibps() - 1.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_build_export_jobs_skips_master_with_no_filename() {
+        let mut master = fixture_master();
+        let master_uuid = master
+            .uuid()
+            .clone()
+            .expect("fixture master should have uuid");
+        master.image_path = Some("/".to_string());
+
+        let mut master_map = HashMap::new();
+        master_map.insert(master_uuid, master);
+
+        let cache = super::super::LibraryCache {
+            version_map: HashMap::new(),
+            master_map,
+            album_map: HashMap::new(),
+            folder_map: HashMap::new(),
+        };
+
+        let jobs = build_export_jobs(&cache, Path::new("/tmp/Library.aplibrary"));
+        assert!(jobs.is_empty());
+    }
+
+    #[test]
+    fn test_build_export_jobs_fallback_for_missing_source_directory() {
+        let master = fixture_master();
+        let master_uuid = master
+            .uuid()
+            .clone()
+            .expect("fixture master should have uuid");
+
+        let mut version = fixture_version();
+        let version_uuid = version
+            .uuid()
+            .clone()
+            .expect("fixture version should have uuid");
+        version.master_uuid = Some(master_uuid.clone());
+        version.is_original = Some(false);
+        version.source_directory = None;
+
+        let mut master_map = HashMap::new();
+        master_map.insert(master_uuid, master);
+
+        let mut version_map = HashMap::new();
+        version_map.insert(version_uuid.clone(), version);
+
+        let cache = super::super::LibraryCache {
+            version_map,
+            master_map,
+            album_map: HashMap::new(),
+            folder_map: HashMap::new(),
+        };
+
+        let jobs = build_export_jobs(&cache, Path::new("/tmp/Library.aplibrary"));
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].version_uuids, vec![version_uuid]);
+        assert_eq!(jobs[0].version_paths.len(), 1);
+        assert!(jobs[0].version_paths[0]
+            .to_string_lossy()
+            .contains("CACHE_OUT_OF_DATE"));
+    }
+
+    #[test]
+    fn test_process_export_nonexistent_library_path_does_not_panic() {
+        let mut args = make_export_args();
+        args.path = "/definitely/not/a/real/library.aplibrary".to_string();
+        process_export(&args);
     }
 }
