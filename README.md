@@ -76,6 +76,7 @@ Commands and Options:
 Notes:
 - `<LIBRARY_PATH>` is the path to the Aperture library bundle.
 - Export logs now include per-job and aggregate effective throughput (MiB/s) to make NAS tuning easier.
+- Aperture album export is not currently supported; export preserves file/folder layout and writes image/XMP metadata.
 - There is no guarantee that a rendered version exists for each Master image.
   Photos may lack versions because they were never rendered into a Preview, or if
   the library was cleaned.
