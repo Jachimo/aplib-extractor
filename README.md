@@ -1,9 +1,7 @@
-Aperture Library Extractor
-==========================
+# Aperture Library Extractor
 
-> This is a fork of the [original aplib-extractor][orig] project, with
-> significant modifications and probably *many* new bugs added.  Please
-> do not bother the upstream maintainer with questions about this version.
+> This is a fork of [hfiguiere/aplib-extractor][orig], with various modifications (and probably *many* new bugs) added.  
+> Please do not bother the upstream maintainer with questions about this version.
 
 [orig]: https://github.com/hfiguiere/aplib-extractor
 
@@ -19,17 +17,13 @@ Requires:
 - exempi (try `sudo apt install libexempi-dev`)
 - SQLite (try `sudo apt install libsqlite3-dev`)
 
-Building
---------
-
-To build the dumper tool:
+## Building
 
 ```shell
-$ cargo build --release
+cargo build --release
 ```
 
-Usage
------
+## Basic Usage
 
 ```shell
 dumper <COMMAND> [OPTIONS] <LIBRARY_PATH>
@@ -86,30 +80,44 @@ Notes:
   Photos may lack versions because they were never rendered into a Preview, or if
   the library was cleaned.
 
+## Examples
 
-Major Changes
--------------
+Because the tool can create large amounts of I/O (especially when used against a remote file server or NAS head), it can be combined with `ionice` and built-in rate limits to manage resource usage:
+
+```
+ionice -c3 \
+nice -n 19 \
+cargo run --release --bin dumper -- \
+export \
+--nas-safe \
+--max-read-mib-per-sec 26 \
+--max-write-mib-per-sec 26 \
+--io-delay-ms 10 \
+--io-chunk-kib 128 \
+--out-dir "/mnt/photos/tmp/EXPORT" \
+"/mnt/photos/IMPORT/Aperture Library.aplibrary"
+```
+
+## Extras
+
+Optional helper utilities are in [extras](extras).
+
+For NAS troubleshooting details and usage, see [extras/README.md](extras/README.md).
+
+## Major Changes
 
 Significant changes from upstream include:
-- Implement a new `export` command that copies master/version images and their accompanying metadata
-  from the Aperture Library, to facilitate migration to other management systems (e.g. [DigiKam][]).
-- Use locally cached hashmaps to improve performance on repeated runs of the program,
-  especially if the Aperture library is on a network filesystem where accesses are expensive.
-  - The first run may still be slow (40 minutes for a 60k image library, using SMB over 1Gb Ethernet),
-    but subsequent runs will use the local cache if available.
-  - **Note that this feature assumes the Aperture Library is no longer being actively modified.**
-    If you are still actively using your Aperture Library (implying you have access to Aperture and a
-    Mac to run it on), there are probably many easier ways of exporting your data from it...
-- Add a `--dryrun` option that shows the operations that the program would have run, but without
-  actually running them against the filesystem.
-  - Note that the commands shown are the rough shell equivalents of the operations that the program
-    will execute via the Rust `std::fs` API; it does not actually run the commands in a (sub)shell.
+
+- Implemented a new `export` command that copies master/version images and their accompanying metadata from the Aperture Library, to facilitate migration to other management systems (e.g. [DigiKam][]).
+- Use locally cached hashmaps to improve performance on repeated runs of the program, especially if the Aperture library is on a network filesystem where accesses are expensive.
+  - The first run may still be slow (40 minutes for a 60k image library, using SMB over 1Gb Ethernet), but subsequent runs will use the local cache if available.
+  - **Note that this feature assumes the Aperture Library is no longer being actively modified.** If you are still actively using your Aperture Library (implying you have access to Aperture and a Mac to run it on), there are probably many easier ways of exporting your data from it...
+- Added a `--dryrun` option, which can be used to "pre-warm" the cache hashmaps.
 
 [DigiKam]: https://www.digikam.org/
 
 
-License
--------
+## License
 
   This Source Code Form is subject to the terms of the Mozilla Public
   License, v. 2.0. If a copy of the MPL was not distributed with this
