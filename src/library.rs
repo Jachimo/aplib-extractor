@@ -669,7 +669,7 @@ impl Library {
     pub fn resolve_master_path(&self, uuid: &str) -> Option<String> {
         match self.get(uuid) {
             Some(crate::StoreWrapper::Master(master)) => {
-                let image_path = master.image_path.as_ref().unwrap();
+                let image_path = master.image_path.as_ref()?;
                 if let Some(volume_uuid) = master.file_volume_uuid.as_ref() {
                     self.get(volume_uuid).and_then(|object| {
                         if let crate::StoreWrapper::Volume(volume) = object {

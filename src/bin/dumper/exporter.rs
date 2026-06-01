@@ -667,7 +667,16 @@ pub fn build_export_jobs(cache: &LibraryCache, library_abs: &Path) -> Vec<Export
         let rel_path = Path::new(image_path);
 
         // The output path for the master will be out_dir/rel_path
-        let master_filename = rel_path.file_name().unwrap().to_string_lossy().to_string();
+        let master_filename = match rel_path.file_name() {
+            Some(name) => name.to_string_lossy().to_string(),
+            None => {
+                eprintln!(
+                    "Warning: master {} has image_path '{}' with no filename, skipping.",
+                    master_uuid, image_path
+                );
+                continue;
+            }
+        };
         let master_rel_dir = rel_path
             .parent()
             .unwrap_or_else(|| Path::new(""))
@@ -722,8 +731,9 @@ pub fn build_export_jobs(cache: &LibraryCache, library_abs: &Path) -> Vec<Export
                         "Warning: Version {} has no source_directory, using fallback path logic (may not find file)",
                         version_uuid
                     );
+                    let library_abs_str = library_abs.to_string_lossy().to_string();
                     get_version_image_path(
-                        library_abs.to_str().unwrap(),
+                        &library_abs_str,
                         version_uuid,
                         &version_file,
                     )
@@ -758,8 +768,16 @@ pub fn build_export_jobs(cache: &LibraryCache, library_abs: &Path) -> Vec<Export
 
 /// The main export entry point, moved from process_export in main.rs
 pub fn process_export(args: &super::ExportArgs) {
-    let library_abs =
-        fs::canonicalize(&args.path).expect("Failed to resolve absolute path to library");
+    let library_abs = match fs::canonicalize(&args.path) {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!(
+                "Failed to resolve absolute path to library '{}': {}",
+                args.path, e
+            );
+            return;
+        }
+    };
 
     let mut library = Library::new(&args.path);
 

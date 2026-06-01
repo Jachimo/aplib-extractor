@@ -31,7 +31,10 @@ fn print_children_for(uuid: &str, tree: &Tree, library: &Library, skip_masters: 
         let mut skipped_masters = 0;
         let mut skipped_versions = 0;
         for child in children {
-            let obj = library.get(child).unwrap();
+            let Some(obj) = library.get(child) else {
+                eprintln!("Warning: tree child '{}' was not found in object store", child);
+                continue;
+            };
             if skip_masters {
                 match obj {
                     Wrapper::Master(_) => {

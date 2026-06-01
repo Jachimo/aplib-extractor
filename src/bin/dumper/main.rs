@@ -403,8 +403,16 @@ fn process_dump(args: &Args) {
         }
 
         let model_info = library.get_model_info().unwrap();
-        let library_abs =
-            fs::canonicalize(&args.path).expect("Failed to resolve absolute path to library");
+        let library_abs = match fs::canonicalize(&args.path) {
+            Ok(path) => path,
+            Err(e) => {
+                eprintln!(
+                    "Failed to resolve absolute path to library '{}': {}",
+                    args.path, e
+                );
+                return;
+            }
+        };
 
         println!("model info");
         println!("\tDB version: {}", model_info.db_version.unwrap_or(0));
