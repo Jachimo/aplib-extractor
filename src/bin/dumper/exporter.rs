@@ -15,6 +15,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::LibraryCache;
 use crate::Library;
@@ -330,12 +331,18 @@ fn dedupe_filename(
     }
 }
 
-fn initialize_checkpoint_log(log_path: &Path) -> std::io::Result<()> {
-    OpenOptions::new()
+fn initialize_checkpoint_log(log_path: &Path, out_dir: &Path) -> std::io::Result<()> {
+    let mut file = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(log_path)
-        .map(|_| ())
+        .open(log_path)?;
+    let started_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    writeln!(file, "run\t{}\t{}", started_at, out_dir.display())?;
+    file.flush()?;
+    Ok(())
 }
 
 fn copy_file_with_throttle(
@@ -1027,7 +1034,7 @@ pub fn process_export(args: &super::ExportArgs) {
             );
             return;
         }
-        if let Err(e) = initialize_checkpoint_log(&checkpoint_log_path) {
+        if let Err(e) = initialize_checkpoint_log(&checkpoint_log_path, out_dir) {
             eprintln!(
                 "Warning: could not initialize checkpoint log {}: {}",
                 checkpoint_log_path.display(),
@@ -1310,11 +1317,12 @@ mod tests {
         let log_path = temp_dir.join("export-checkpoint.log");
         fs::write(&log_path, "previous-run\n").expect("seed log should be writable");
 
-        initialize_checkpoint_log(&log_path).expect("initialization should not truncate");
+        initialize_checkpoint_log(&log_path, &temp_dir).expect("initialization should not truncate");
         append_checkpoint_log(&log_path, "master\tabc\t/path/to/master.jpg");
 
         let contents = fs::read_to_string(&log_path).expect("log should be readable");
         assert!(contents.starts_with("previous-run\n"));
+        assert!(contents.contains("run\t"));
         assert!(contents.contains("master\tabc\t/path/to/master.jpg"));
     }
 
