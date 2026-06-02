@@ -8,6 +8,7 @@
 
 use serde::Serialize;
 use std::fs;
+use std::fs::OpenOptions;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -30,6 +31,15 @@ pub struct ExportJob {
     pub version_paths: Vec<PathBuf>,
     pub version_filenames: Vec<String>,
     // Removed: pub sidecar_filename: String,
+}
+
+struct ExportContext<'a> {
+    cache: &'a LibraryCache,
+    library_root_path: &'a Path,
+    flat_keyword_map: &'a std::collections::HashMap<String, String>,
+    hierarchical_keyword_map: &'a std::collections::HashMap<String, String>,
+    io_throttle: &'a IoThrottle,
+    checkpoint_log_path: Option<&'a Path>,
 }
 
 #[derive(Clone, Debug)]
@@ -223,14 +233,22 @@ fn write_sidecar_with_throttle(
     })
 }
 
+fn append_checkpoint_log(log_path: &Path, entry: &str) {
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
+        let _ = writeln!(file, "{entry}");
+        let _ = file.flush();
+    } else {
+        eprintln!(
+            "Warning: could not append checkpoint entry to {}",
+            log_path.display()
+        );
+    }
+}
+
 fn export_job_files(
     job: &ExportJob,
     out_dir: &Path,
-    cache: &LibraryCache,
-    library_root_path: &Path,
-    flat_keyword_map: &std::collections::HashMap<String, String>,
-    hierarchical_keyword_map: &std::collections::HashMap<String, String>,
-    io_throttle: &IoThrottle,
+    ctx: &ExportContext<'_>,
 ) -> std::io::Result<IoStats> {
     let mut io_stats = IoStats::default();
 
@@ -248,7 +266,7 @@ fn export_job_files(
 
     // Copy master
     let master_out = master_out_dir.join(&job.master_filename);
-    let copied_master = match copy_file_with_throttle(&job.master_path, &master_out, io_throttle) {
+    let copied_master = match copy_file_with_throttle(&job.master_path, &master_out, ctx.io_throttle) {
         Ok(stats) => stats,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             eprintln!(
@@ -274,19 +292,19 @@ fn export_job_files(
     let master_sidecar = master_out.with_extension("xmp");
     let mut xmp = exempi2::Xmp::new();
 
-    if let Some(master) = cache.master_map.get(&job.master_uuid) {
+    if let Some(master) = ctx.cache.master_map.get(&job.master_uuid) {
         let mut master = master.clone();
 
         // Resolve keywords from UUIDs to names
         if let Some(ref raw_keywords) = master.keywords {
             let flat_resolved = aplib::keyword::resolve_keyword_uuids(
                 raw_keywords,
-                flat_keyword_map,
+                ctx.flat_keyword_map,
                 &format!("Master {}", job.master_uuid),
             );
             let hierarchical_resolved = aplib::keyword::resolve_keyword_uuids(
                 raw_keywords,
-                hierarchical_keyword_map,
+                ctx.hierarchical_keyword_map,
                 &format!("Master {}", job.master_uuid),
             );
             master.keywords = if flat_resolved.is_empty() {
@@ -308,7 +326,7 @@ fn export_job_files(
 
         // Populate "ApertureLibraryPath" custom metadata field from actual dir structure
         let mut custom = master.custom_aplib_fields.unwrap_or_default();
-        if let Ok(rel_path) = job.master_path.strip_prefix(library_root_path) {
+        if let Ok(rel_path) = job.master_path.strip_prefix(ctx.library_root_path) {
             custom.insert(
                 "ApertureLibraryPath".to_string(),
                 rel_path.to_string_lossy().to_string(),
@@ -334,7 +352,7 @@ fn export_job_files(
         .unwrap_or_else(|_| exempi2::XmpString::new());
     let xmp_bytes = xmp_string.to_string();
     let master_sidecar_stats =
-        write_sidecar_with_throttle(&master_sidecar, xmp_bytes.as_bytes(), io_throttle).map_err(
+        write_sidecar_with_throttle(&master_sidecar, xmp_bytes.as_bytes(), ctx.io_throttle).map_err(
             |e| {
                 eprintln!(
                     "Error writing master XMP sidecar:\n  Path:  {}\n  Error: {} (os error: {:?})",
@@ -346,6 +364,9 @@ fn export_job_files(
             },
         )?;
     io_stats.add(master_sidecar_stats);
+    if let Some(log_path) = ctx.checkpoint_log_path {
+        append_checkpoint_log(log_path, &format!("master\t{}\t{}", job.master_uuid, master_out.display()));
+    }
 
     // Copy versions and write their sidecars
     let version_out_dir = master_out_dir.clone();
@@ -389,7 +410,7 @@ fn export_job_files(
             // We'll still create the XMP sidecar below
         } else {
             eprintln!("  Version {} (separate rendered image)", version_uuid);
-            let copied_version = match copy_file_with_throttle(src, &dest, io_throttle) {
+            let copied_version = match copy_file_with_throttle(src, &dest, ctx.io_throttle) {
                 Ok(stats) => stats,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     eprintln!(
@@ -416,18 +437,18 @@ fn export_job_files(
         // Write version XMP sidecar (always, regardless of whether image was copied)
         let version_sidecar = dest.with_extension("xmp");
         let mut xmp = exempi2::Xmp::new();
-        if let Some(version) = cache.version_map.get(version_uuid) {
+        if let Some(version) = ctx.cache.version_map.get(version_uuid) {
             let mut version = version.clone();
             // Resolve keywords from UUIDs to names
             if let Some(ref raw_keywords) = version.keywords {
                 let flat_resolved = aplib::keyword::resolve_keyword_uuids(
                     raw_keywords,
-                    flat_keyword_map,
+                    ctx.flat_keyword_map,
                     &format!("Version {}", version_uuid),
                 );
                 let hierarchical_resolved = aplib::keyword::resolve_keyword_uuids(
                     raw_keywords,
-                    hierarchical_keyword_map,
+                    ctx.hierarchical_keyword_map,
                     &format!("Version {}", version_uuid),
                 );
                 version.keywords = if flat_resolved.is_empty() {
@@ -447,7 +468,7 @@ fn export_job_files(
                 }
             }
             let mut custom = version.custom_aplib_fields.unwrap_or_default();
-            if let Ok(rel_path) = src.strip_prefix(library_root_path) {
+            if let Ok(rel_path) = src.strip_prefix(ctx.library_root_path) {
                 custom.insert(
                     "ApertureLibraryPath".to_string(),
                     rel_path.to_string_lossy().to_string(),
@@ -475,7 +496,7 @@ fn export_job_files(
             .serialize(SerialFlags::default(), 0)
             .unwrap_or_else(|_| exempi2::XmpString::new());
         let xmp_bytes = xmp_string.to_string();
-        let version_sidecar_stats = write_sidecar_with_throttle(&version_sidecar, xmp_bytes.as_bytes(), io_throttle).map_err(|e| {
+        let version_sidecar_stats = write_sidecar_with_throttle(&version_sidecar, xmp_bytes.as_bytes(), ctx.io_throttle).map_err(|e| {
             eprintln!(
                 "Error writing version XMP sidecar:\n  Version UUID: {}\n  Path:  {}\n  Error: {} (os error: {:?})",
                 version_uuid,
@@ -486,6 +507,12 @@ fn export_job_files(
             e
         })?;
         io_stats.add(version_sidecar_stats);
+        if let Some(log_path) = ctx.checkpoint_log_path {
+            append_checkpoint_log(
+                log_path,
+                &format!("version\t{}\t{}\t{}", job.master_uuid, version_uuid, version_sidecar.display()),
+            );
+        }
     }
 
     Ok(io_stats)
@@ -804,10 +831,18 @@ pub fn process_export(args: &super::ExportArgs) {
 
     let out_dir = args.out_dir.as_deref().unwrap_or(".");
     let out_dir = Path::new(out_dir);
+    let checkpoint_log_path = out_dir.join("export-checkpoint.log");
     if args.dryrun {
         println!("mkdir -p '{}'", out_dir.display());
     } else {
         fs::create_dir_all(out_dir).expect("Failed to create output directory");
+        if let Err(e) = fs::File::create(&checkpoint_log_path) {
+            eprintln!(
+                "Warning: could not initialize checkpoint log {}: {}",
+                checkpoint_log_path.display(),
+                e
+            );
+        }
     }
 
     eprintln!("Export I/O throttle settings: {}", io_throttle.describe());
@@ -823,6 +858,18 @@ pub fn process_export(args: &super::ExportArgs) {
     let jobs = build_export_jobs(&cache, &library_abs);
     println!("Prepared {} export jobs (one per master).", jobs.len());
     let mut total_io = IoStats::default();
+    let export_context = ExportContext {
+        cache: &cache,
+        library_root_path: &library_abs,
+        flat_keyword_map: &flat_keyword_map,
+        hierarchical_keyword_map: &hierarchical_keyword_map,
+        io_throttle: &io_throttle,
+        checkpoint_log_path: if args.dryrun {
+            None
+        } else {
+            Some(checkpoint_log_path.as_path())
+        },
+    };
 
     for (idx, job) in jobs.iter().enumerate() {
         println!(
@@ -834,11 +881,7 @@ pub fn process_export(args: &super::ExportArgs) {
             match export_job_files(
                 job,
                 out_dir,
-                &cache,
-                &library_abs,
-                &flat_keyword_map,
-                &hierarchical_keyword_map,
-                &io_throttle,
+                &export_context,
             ) {
                 Ok(job_io) => {
                     total_io.add(job_io);
@@ -859,6 +902,15 @@ pub fn process_export(args: &super::ExportArgs) {
     }
 
     if !args.dryrun {
+        append_checkpoint_log(
+            &checkpoint_log_path,
+            &format!(
+                "done\tread={:.2}MiB\twrote={:.2}MiB\telapsed={:.2}s",
+                total_io.read_bytes as f64 / (1024.0 * 1024.0),
+                total_io.written_bytes as f64 / (1024.0 * 1024.0),
+                total_io.elapsed.as_secs_f64(),
+            ),
+        );
         println!(
             "Export I/O summary: read {:.2} MiB, wrote {:.2} MiB in {:.2}s ({:.2} MiB/s effective)",
             total_io.read_bytes as f64 / (1024.0 * 1024.0),
@@ -1072,5 +1124,22 @@ mod tests {
         let mut args = make_export_args();
         args.path = "/definitely/not/a/real/library.aplibrary".to_string();
         process_export(&args);
+    }
+
+    #[test]
+    fn test_append_checkpoint_log_writes_entries() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "aplib-checkpoint-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&temp_dir).expect("temp dir should be creatable");
+        let log_path = temp_dir.join("export-checkpoint.log");
+
+        append_checkpoint_log(&log_path, "master\tabc\t/path/to/master.jpg");
+        append_checkpoint_log(&log_path, "version\tabc\tdef\t/path/to/version.jpg");
+
+        let contents = fs::read_to_string(&log_path).expect("log should be readable");
+        assert!(contents.contains("master\tabc\t/path/to/master.jpg"));
+        assert!(contents.contains("version\tabc\tdef\t/path/to/version.jpg"));
     }
 }
