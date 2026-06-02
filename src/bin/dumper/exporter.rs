@@ -13,6 +13,8 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
+use std::collections::HashSet;
+use std::cmp::Ordering;
 
 use super::LibraryCache;
 use crate::Library;
@@ -40,6 +42,15 @@ struct ExportContext<'a> {
     hierarchical_keyword_map: &'a std::collections::HashMap<String, String>,
     io_throttle: &'a IoThrottle,
     checkpoint_log_path: Option<&'a Path>,
+}
+
+#[derive(Clone, Debug)]
+struct VersionExportEntry {
+    version_uuid: String,
+    version_number: Option<i64>,
+    version_name: Option<String>,
+    version_file_name: String,
+    version_source_directory: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -168,6 +179,126 @@ impl IoThrottle {
         if !self.operation_delay.is_zero() {
             thread::sleep(self.operation_delay);
         }
+    }
+}
+
+fn compare_optional_version_numbers(left: &Option<i64>, right: &Option<i64>) -> Ordering {
+    match (left, right) {
+        (Some(left), Some(right)) => left.cmp(right),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+fn sanitize_filename_component(input: &str, max_len: usize) -> String {
+    let mut sanitized = String::new();
+    let mut previous_was_dash = false;
+
+    for ch in input.trim().chars() {
+        let mapped = match ch {
+            '/' | '\\' | ':' | '"' | '<' | '>' | '|' | '?' | '*' => Some('-'),
+            c if c.is_control() => None,
+            c if c.is_whitespace() => Some('-'),
+            c => Some(c),
+        };
+
+        if let Some(mapped_ch) = mapped {
+            if mapped_ch == '-' {
+                if sanitized.is_empty() || previous_was_dash {
+                    continue;
+                }
+                previous_was_dash = true;
+            } else {
+                previous_was_dash = false;
+            }
+            sanitized.push(mapped_ch);
+        }
+    }
+
+    let trimmed = sanitized
+        .trim_matches(|ch: char| ch == '.' || ch == '-' || ch.is_whitespace())
+        .to_string();
+
+    let mut result: String = trimmed.chars().take(max_len).collect();
+    while result.ends_with('-') || result.ends_with('.') || result.ends_with(' ') {
+        result.pop();
+    }
+    result
+}
+
+fn short_uuid_token(version_uuid: &str) -> String {
+    let token: String = version_uuid
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .map(|ch| ch.to_ascii_lowercase())
+        .take(8)
+        .collect();
+
+    if token.is_empty() {
+        String::from("unknown")
+    } else {
+        token
+    }
+}
+
+fn master_stem(master_filename: &str, master_uuid: &str) -> String {
+    Path::new(master_filename)
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().to_string())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or_else(|| master_uuid.to_string())
+}
+
+fn version_extension(version_file_name: &str) -> String {
+    Path::new(version_file_name)
+        .extension()
+        .map(|extension| format!(".{}", extension.to_string_lossy()))
+        .unwrap_or_default()
+}
+
+fn build_version_filename(
+    master_stem: &str,
+    version_name: Option<&str>,
+    version_uuid: &str,
+    version_file_name: &str,
+) -> String {
+    let label = version_name
+        .map(|name| sanitize_filename_component(name, 48))
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| format!("v-{}", short_uuid_token(version_uuid)));
+
+    format!("{}__{}{}", master_stem, label, version_extension(version_file_name))
+}
+
+fn dedupe_filename(candidate: String, used: &mut HashSet<String>, version_uuid: &str) -> String {
+    if used.insert(candidate.clone()) {
+        return candidate;
+    }
+
+    let candidate_path = Path::new(&candidate);
+    let stem = candidate_path
+        .file_stem()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| candidate.clone());
+    let extension = candidate_path
+        .extension()
+        .map(|value| format!(".{}", value.to_string_lossy()))
+        .unwrap_or_default();
+    let token = short_uuid_token(version_uuid);
+
+    let mut attempt = format!("{}__u-{}{}", stem, token, extension);
+    if used.insert(attempt.clone()) {
+        return attempt;
+    }
+
+    let mut suffix = 2;
+    loop {
+        attempt = format!("{}__u-{}__n{}{}", stem, token, suffix, extension);
+        if used.insert(attempt.clone()) {
+            return attempt;
+        }
+        suffix += 1;
     }
 }
 
@@ -709,75 +840,92 @@ pub fn build_export_jobs(cache: &LibraryCache, library_abs: &Path) -> Vec<Export
             .unwrap_or_else(|| Path::new(""))
             .to_path_buf();
 
+        let master_stem_name = master_stem(&master_filename, master_uuid);
+
         // Find all versions for this master
+        let mut version_entries: Vec<VersionExportEntry> = cache
+            .version_map
+            .iter()
+            .filter_map(|(version_uuid, version)| {
+                if version.master_uuid.as_ref() == Some(master_uuid)
+                    && version.is_original != Some(true)
+                {
+                    Some(VersionExportEntry {
+                        version_uuid: version_uuid.clone(),
+                        version_number: version.version_number,
+                        version_name: version.name.clone(),
+                        version_file_name: version.file_name.clone().unwrap_or_default(),
+                        version_source_directory: version.source_directory.clone(),
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        version_entries.sort_by(|left, right| {
+            compare_optional_version_numbers(&left.version_number, &right.version_number)
+                .then_with(|| left.version_uuid.cmp(&right.version_uuid))
+        });
+
+        let mut used_filenames: HashSet<String> = HashSet::new();
+        used_filenames.insert(master_filename.clone());
+
         let mut version_uuids = Vec::new();
         let mut version_paths = Vec::new();
         let mut version_filenames = Vec::new();
-        for (version_uuid, version) in &cache.version_map {
-            if version.master_uuid.as_ref() == Some(master_uuid) {
-                // Skip original versions - they're identical to the master which is already exported
-                if version.is_original == Some(true) {
-                    continue;
-                }
 
-                version_uuids.push(version_uuid.clone());
-                let version_file = version.file_name.clone().unwrap_or_default();
+        for entry in version_entries {
+            version_uuids.push(entry.version_uuid.clone());
 
-                // Transform the source_directory path from Versions tree to Masters tree
-                let version_path = if let Some(ref source_dir) = version.source_directory {
-                    // Transform: Database/Versions/.../UUID -> Masters/.../
-                    if let Some(masters_dir) = transform_versions_to_masters_path(source_dir) {
-                        let masters_timestamp_dir = library_abs.join(&masters_dir);
-                        // Search flexibly for the file (may be in subdirectories)
-                        if let Some(found_path) =
-                            find_version_image_file(&masters_timestamp_dir, &version_file)
-                        {
-                            found_path
-                        } else {
-                            // File not found even with flexible search
-                            eprintln!(
-                                "Warning: Could not find version file '{}' for version {} in {}",
-                                version_file,
-                                version_uuid,
-                                masters_timestamp_dir.display()
-                            );
-                            // Return a non-existent path so the later check will skip it
-                            masters_timestamp_dir.join(&version_file)
-                        }
+            // Transform the source_directory path from Versions tree to Masters tree
+            let version_path = if let Some(ref source_dir) = entry.version_source_directory {
+                // Transform: Database/Versions/.../UUID -> Masters/.../
+                if let Some(masters_dir) = transform_versions_to_masters_path(source_dir) {
+                    let masters_timestamp_dir = library_abs.join(&masters_dir);
+                    // Search flexibly for the file (may be in subdirectories)
+                    if let Some(found_path) =
+                        find_version_image_file(&masters_timestamp_dir, &entry.version_file_name)
+                    {
+                        found_path
                     } else {
-                        // Transformation failed - try using source_dir directly as fallback
+                        // File not found even with flexible search
                         eprintln!(
-                            "Warning: Failed to transform version path for {}, trying source_directory directly",
-                            version_uuid
+                            "Warning: Could not find version file '{}' for version {} in {}",
+                            entry.version_file_name,
+                            entry.version_uuid,
+                            masters_timestamp_dir.display()
                         );
-                        library_abs.join(source_dir).join(&version_file)
+                        // Return a non-existent path so the later check will skip it
+                        masters_timestamp_dir.join(&entry.version_file_name)
                     }
                 } else {
-                    // Fallback to old logic (will likely fail, but preserves old behavior)
+                    // Transformation failed - try using source_dir directly as fallback
                     eprintln!(
-                        "Warning: Version {} has no source_directory, using fallback path logic (may not find file)",
-                        version_uuid
+                        "Warning: Failed to transform version path for {}, trying source_directory directly",
+                        entry.version_uuid
                     );
-                    let library_abs_str = library_abs.to_string_lossy().to_string();
-                    get_version_image_path(
-                        &library_abs_str,
-                        version_uuid,
-                        &version_file,
-                    )
-                };
-
-                let version_filename = format!(
-                    "{}_version_{}{}",
-                    master_uuid,
-                    version_uuid,
-                    Path::new(&version_file)
-                        .extension()
-                        .map(|e| format!(".{}", e.to_string_lossy()))
-                        .unwrap_or_default()
+                    library_abs.join(source_dir).join(&entry.version_file_name)
+                }
+            } else {
+                // Fallback to old logic (will likely fail, but preserves old behavior)
+                eprintln!(
+                    "Warning: Version {} has no source_directory, using fallback path logic (may not find file)",
+                    entry.version_uuid
                 );
-                version_paths.push(version_path);
-                version_filenames.push(version_filename);
-            }
+                let library_abs_str = library_abs.to_string_lossy().to_string();
+                get_version_image_path(&library_abs_str, &entry.version_uuid, &entry.version_file_name)
+            };
+
+            let candidate_filename = build_version_filename(
+                &master_stem_name,
+                entry.version_name.as_deref(),
+                &entry.version_uuid,
+                &entry.version_file_name,
+            );
+            let version_filename = dedupe_filename(candidate_filename, &mut used_filenames, &entry.version_uuid);
+            version_paths.push(version_path);
+            version_filenames.push(version_filename);
         }
 
         jobs.push(ExportJob {
@@ -935,6 +1083,12 @@ mod tests {
             .join(rel)
     }
 
+    fn fixture_library_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata")
+            .join("TestLibrary.aplibrary")
+    }
+
     fn fixture_master() -> Master {
         Master::from_path(
             fixture_path(
@@ -1055,6 +1209,73 @@ mod tests {
             elapsed: Duration::from_secs(2),
         };
         assert!((stats.mibps() - 1.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_sanitize_filename_component_and_fallback_token() {
+        assert_eq!(sanitize_filename_component("  BW High/Contrast?  ", 48), "BW-High-Contrast");
+        assert_eq!(short_uuid_token("ABCDEF12-3456"), "abcdef12");
+        assert_eq!(short_uuid_token("***"), "unknown");
+    }
+
+    #[test]
+    fn test_version_filename_and_dedupe() {
+        let candidate = build_version_filename(
+            "PICT0019",
+            Some("BW High Contrast"),
+            "ABCDEF12",
+            "rendered.jpg",
+        );
+        assert_eq!(candidate, "PICT0019__BW-High-Contrast.jpg");
+
+        let fallback = build_version_filename("PICT0019", None, "ABCDEF12", "rendered.jpg");
+        assert_eq!(fallback, "PICT0019__v-abcdef12.jpg");
+
+        let mut used = HashSet::new();
+        used.insert(candidate.clone());
+        let deduped = dedupe_filename(candidate, &mut used, "ABCDEF12");
+        assert_eq!(deduped, "PICT0019__BW-High-Contrast__u-abcdef12.jpg");
+    }
+
+    #[test]
+    fn test_build_export_jobs_uses_sorted_version_names() {
+        let master = fixture_master();
+        let master_uuid = master
+            .uuid()
+            .clone()
+            .expect("fixture master should have uuid");
+
+        let mut first_version = fixture_version();
+        first_version.master_uuid = Some(master_uuid.clone());
+        first_version.is_original = Some(false);
+        first_version.version_number = Some(2);
+        first_version.name = Some("Second Edit".to_string());
+
+        let mut second_version = fixture_version();
+        second_version.master_uuid = Some(master_uuid.clone());
+        second_version.is_original = Some(false);
+        second_version.version_number = Some(1);
+        second_version.name = Some("First Edit".to_string());
+
+        let mut master_map = HashMap::new();
+        master_map.insert(master_uuid.clone(), master);
+
+        let mut version_map = HashMap::new();
+        version_map.insert("version-b".to_string(), first_version);
+        version_map.insert("version-a".to_string(), second_version);
+
+        let cache = super::super::LibraryCache {
+            version_map,
+            master_map,
+            album_map: HashMap::new(),
+            folder_map: HashMap::new(),
+        };
+
+        let jobs = build_export_jobs(&cache, &fixture_library_path());
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].version_uuids, vec!["version-a".to_string(), "version-b".to_string()]);
+        assert_eq!(jobs[0].version_filenames[0], "PICT0019__First-Edit.JPG");
+        assert_eq!(jobs[0].version_filenames[1], "PICT0019__Second-Edit.JPG");
     }
 
     #[test]
