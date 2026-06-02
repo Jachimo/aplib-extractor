@@ -9,12 +9,12 @@
 use serde::Serialize;
 use std::fs;
 use std::fs::OpenOptions;
+use std::cmp::Ordering;
 use std::io::{BufReader, BufWriter, Read, Write};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
-use std::collections::HashSet;
-use std::cmp::Ordering;
 
 use super::LibraryCache;
 use crate::Library;
@@ -22,6 +22,8 @@ use crate::Library;
 use exempi2::SerialFlags;
 //use crate::exporter::ns; // for custom XMP namespace addition
 use aplib::xmp::{ns, ToXmp, XmpProperty};
+
+const MAX_EXPORT_FILENAME_LEN: usize = 200;
 
 #[derive(Debug, Serialize)]
 pub struct ExportJob {
@@ -257,49 +259,83 @@ fn version_extension(version_file_name: &str) -> String {
         .unwrap_or_default()
 }
 
+fn compose_version_filename(master_stem: &str, label: &str, version_file_name: &str) -> String {
+    let extension = version_extension(version_file_name);
+    let separator_len = 2;
+    let max_master_len = MAX_EXPORT_FILENAME_LEN
+        .saturating_sub(separator_len + label.len() + extension.len());
+    let mut fitted_master: String = master_stem.chars().take(max_master_len).collect();
+
+    if fitted_master.is_empty() {
+        fitted_master = master_stem
+            .chars()
+            .take(MAX_EXPORT_FILENAME_LEN.saturating_sub(separator_len + label.len() + extension.len()))
+            .collect();
+    }
+
+    if fitted_master.is_empty() {
+        fitted_master = String::from("export");
+    }
+
+    format!("{}__{}{}", fitted_master, label, extension)
+}
+
+fn build_version_label(version_name: Option<&str>, version_uuid: &str) -> String {
+    version_name
+        .map(|name| sanitize_filename_component(name, 48))
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| format!("v-{}", short_uuid_token(version_uuid)))
+}
+
+#[cfg(test)]
 fn build_version_filename(
     master_stem: &str,
     version_name: Option<&str>,
     version_uuid: &str,
     version_file_name: &str,
 ) -> String {
-    let label = version_name
-        .map(|name| sanitize_filename_component(name, 48))
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| format!("v-{}", short_uuid_token(version_uuid)));
-
-    format!("{}__{}{}", master_stem, label, version_extension(version_file_name))
+    let label = build_version_label(version_name, version_uuid);
+    compose_version_filename(master_stem, &label, version_file_name)
 }
 
-fn dedupe_filename(candidate: String, used: &mut HashSet<String>, version_uuid: &str) -> String {
+fn dedupe_filename(
+    master_stem: &str,
+    version_name: Option<&str>,
+    version_uuid: &str,
+    version_file_name: &str,
+    used: &mut HashSet<String>,
+) -> String {
+    let label = build_version_label(version_name, version_uuid);
+    let candidate = compose_version_filename(master_stem, &label, version_file_name);
     if used.insert(candidate.clone()) {
         return candidate;
     }
 
-    let candidate_path = Path::new(&candidate);
-    let stem = candidate_path
-        .file_stem()
-        .map(|value| value.to_string_lossy().to_string())
-        .unwrap_or_else(|| candidate.clone());
-    let extension = candidate_path
-        .extension()
-        .map(|value| format!(".{}", value.to_string_lossy()))
-        .unwrap_or_default();
     let token = short_uuid_token(version_uuid);
 
-    let mut attempt = format!("{}__u-{}{}", stem, token, extension);
+    let dedupe_label = format!("{}__u-{}", label, token);
+    let mut attempt = compose_version_filename(master_stem, &dedupe_label, version_file_name);
     if used.insert(attempt.clone()) {
         return attempt;
     }
 
     let mut suffix = 2;
     loop {
-        attempt = format!("{}__u-{}__n{}{}", stem, token, suffix, extension);
+        let dedupe_label = format!("{}__u-{}__n{}", label, token, suffix);
+        attempt = compose_version_filename(master_stem, &dedupe_label, version_file_name);
         if used.insert(attempt.clone()) {
             return attempt;
         }
         suffix += 1;
     }
+}
+
+fn initialize_checkpoint_log(log_path: &Path) -> std::io::Result<()> {
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .map(|_| ())
 }
 
 fn copy_file_with_throttle(
@@ -917,13 +953,13 @@ pub fn build_export_jobs(cache: &LibraryCache, library_abs: &Path) -> Vec<Export
                 get_version_image_path(&library_abs_str, &entry.version_uuid, &entry.version_file_name)
             };
 
-            let candidate_filename = build_version_filename(
+            let version_filename = dedupe_filename(
                 &master_stem_name,
                 entry.version_name.as_deref(),
                 &entry.version_uuid,
                 &entry.version_file_name,
+                &mut used_filenames,
             );
-            let version_filename = dedupe_filename(candidate_filename, &mut used_filenames, &entry.version_uuid);
             version_paths.push(version_path);
             version_filenames.push(version_filename);
         }
@@ -983,8 +1019,15 @@ pub fn process_export(args: &super::ExportArgs) {
     if args.dryrun {
         println!("mkdir -p '{}'", out_dir.display());
     } else {
-        fs::create_dir_all(out_dir).expect("Failed to create output directory");
-        if let Err(e) = fs::File::create(&checkpoint_log_path) {
+        if let Err(e) = fs::create_dir_all(out_dir) {
+            eprintln!(
+                "Failed to create output directory '{}': {}",
+                out_dir.display(),
+                e
+            );
+            return;
+        }
+        if let Err(e) = initialize_checkpoint_log(&checkpoint_log_path) {
             eprintln!(
                 "Warning: could not initialize checkpoint log {}: {}",
                 checkpoint_log_path.display(),
@@ -999,9 +1042,8 @@ pub fn process_export(args: &super::ExportArgs) {
     let _ = exempi2::register_namespace(ns::APLIB, "aplib");
     let _ = exempi2::register_namespace(ns::NS_DIGIKAM, "digiKam");
 
-    // Currently we export all masters and versions *that exist in the Versions tree*
-    // This means: "orphaned" masters (without versions) will not be exported!
-    // TODO: Create an option to either include or at least report a list of "orphans"
+    // Export all masters, and attach any matching rendered versions found in the Versions tree.
+    // Masters without versions still export as standalone master images.
 
     let jobs = build_export_jobs(&cache, &library_abs);
     println!("Prepared {} export jobs (one per master).", jobs.len());
@@ -1233,8 +1275,47 @@ mod tests {
 
         let mut used = HashSet::new();
         used.insert(candidate.clone());
-        let deduped = dedupe_filename(candidate, &mut used, "ABCDEF12");
+        let deduped = dedupe_filename(
+            "PICT0019",
+            Some("BW High Contrast"),
+            "ABCDEF12",
+            "rendered.jpg",
+            &mut used,
+        );
         assert_eq!(deduped, "PICT0019__BW-High-Contrast__u-abcdef12.jpg");
+    }
+
+    #[test]
+    fn test_version_filename_length_is_bounded() {
+        let long_master_stem = "A".repeat(300);
+        let long_label = Some(&"B".repeat(300));
+        let filename = build_version_filename(
+            &long_master_stem,
+            long_label.map(|label| label.as_str()),
+            "ABCDEF12",
+            "rendered.jpg",
+        );
+
+        assert!(filename.len() <= MAX_EXPORT_FILENAME_LEN);
+        assert!(filename.ends_with(".jpg"));
+    }
+
+    #[test]
+    fn test_initialize_checkpoint_log_preserves_existing_contents() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "aplib-checkpoint-init-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&temp_dir).expect("temp dir should be creatable");
+        let log_path = temp_dir.join("export-checkpoint.log");
+        fs::write(&log_path, "previous-run\n").expect("seed log should be writable");
+
+        initialize_checkpoint_log(&log_path).expect("initialization should not truncate");
+        append_checkpoint_log(&log_path, "master\tabc\t/path/to/master.jpg");
+
+        let contents = fs::read_to_string(&log_path).expect("log should be readable");
+        assert!(contents.starts_with("previous-run\n"));
+        assert!(contents.contains("master\tabc\t/path/to/master.jpg"));
     }
 
     #[test]
