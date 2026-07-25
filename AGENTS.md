@@ -12,18 +12,18 @@ This is a Rust tool for extracting data from Apple Aperture 3.x libraries. It pa
 # Build the dumper binary
 cargo build --release
 
-# Run dumper (basic structure)
-cargo run --bin dumper -- <COMMAND> [OPTIONS] <LIBRARY_PATH>
+# Run dumper (export-only CLI)
+cargo run --bin dumper -- [OPTIONS] <LIBRARY_PATH>
 
 # Common commands
-cargo run --bin dumper -- dump --all ~/Pictures/MyLibrary.aplibrary
-cargo run --bin dumper -- list --masters ~/Pictures/MyLibrary.aplibrary
-cargo run --bin dumper -- tree ~/Pictures/MyLibrary.aplibrary
-cargo run --bin dumper -- export --out-dir ./output ~/Pictures/MyLibrary.aplibrary
-cargo run --bin dumper -- export --dryrun ~/Pictures/MyLibrary.aplibrary
+cargo run --bin dumper -- --out-dir ./output ~/Pictures/MyLibrary.aplibrary
+cargo run --bin dumper -- --dryrun ~/Pictures/MyLibrary.aplibrary
 
 # Tests (if present)
 cargo test
+
+# Exporter-focused regression tests
+cargo test --bin dumper exporter::tests:: -- --nocapture
 ```
 
 ## Architecture
@@ -101,6 +101,32 @@ The `export` command (`src/bin/dumper/exporter.rs`):
    - Resolved keyword names (converted from UUIDs)
    - Original library path information
 
+### Export Regression Baseline
+
+There is now a migration-focused golden export test in [src/bin/dumper/exporter.rs](/home/jtuttle/src/aplib-extractor/src/bin/dumper/exporter.rs):
+
+- `test_export_fixture_library_writes_expected_files_and_digikam_xmp_fields`
+
+This test uses the synthetic bundle in [testdata](testdata) and should be treated as the main behavioral guardrail when simplifying the codebase. It asserts:
+
+- one real master-plus-version export path end-to-end
+- expected emitted filenames in the output directory
+- creation of matching XMP sidecars
+- presence of DigiKam-critical serialized XMP fields such as `dc:title`, `photoshop:Headline`, `xmp:CreateDate`, `exif:DateTimeOriginal`, `digiKam:PickLabel`, and `digiKam:ColorLabel`
+- preservation of provenance fields in the `aplib:` namespace
+
+When refactoring, keep this test green first, then widen coverage with additional fixture cases.
+
+### Refactor Safety Rules
+
+When simplifying this fork toward a migration-only tool, apply these rules:
+
+- Preserve the end-to-end export contract before removing inherited features.
+- Run `cargo test --bin dumper exporter::tests:: -- --nocapture` after any export-path change.
+- Treat `test_export_fixture_library_writes_expected_files_and_digikam_xmp_fields` as the minimum required gate before deleting CLI commands, model fields, or metadata mappings.
+- Prefer deleting code only after the exporter golden test proves the migration workflow still emits the expected files and DigiKam-facing sidecars.
+- If behavior must intentionally change, update the fixture notes in `testdata/README.md` and the golden assertions in `src/bin/dumper/exporter.rs` in the same change.
+
 ### Caching System
 
 The dumper implements a JSON-based caching system in `main.rs`:
@@ -139,10 +165,10 @@ The `xmp.rs` module provides the `ToXmp` trait for converting Aperture metadata 
 - `src/library.rs` - Main Library struct with loading logic
 - `src/bin/dumper/main.rs` - CLI entry point and cache management
 - `src/bin/dumper/exporter.rs` - Export functionality
-- `src/bin/dumper/tree.rs` - Tree view command
 - `src/{album,folder,master,version,volume,keyword}.rs` - Individual object types
 - `src/xmp.rs` - XMP metadata generation and sanitization utilities
 - `src/audit.rs` - Auditing/validation framework
+- `testdata/` - Synthetic Aperture fixtures, including the golden migration test bundle
 
 ## External Dependencies
 

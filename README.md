@@ -26,57 +26,23 @@ cargo build --release
 ## Basic Usage
 
 ```shell
-dumper <COMMAND> [OPTIONS] <LIBRARY_PATH>
+dumper [OPTIONS] <LIBRARY_PATH>
 ```
 
-Commands and Options:
+Options:
 
-- `dump`  
-  Print detailed information about library contents.
-  - `--albums`      Dump albums.
-  - `--folders`     Dump folders.
-  - `--masters`     Dump master images.
-  - `--versions`    Dump edited versions.
-  - `--keywords`    Dump keywords.
-  - `--volumes`     Dump volumes.
-  - `--all`         Dump all supported types.
-
-- `list`  
-  Print a simple list of items.
-  - `--albums`      List albums.
-  - `--folders`     List folders.
-  - `--masters`     List master images.
-  - `--versions`    List edited versions.
-  - `--keywords`    List keywords.
-  - `--volumes`     List volumes.
-
-- `audit`  
-  Audit the library for inconsistencies.
-  - `--albums`      Audit albums.
-  - `--folders`     Audit folders.
-  - `--masters`     Audit master images.
-  - `--versions`    Audit edited versions.
-  - `--keywords`    Audit keywords.
-  - `--volumes`     Audit volumes.
-  - `--all`         Audit all supported types.
-
-- `tree`  
-  Print a tree view of the folder/album hierarchy.
-
-- `export`  
-  Export images to the working directory.
-  - `--out-dir DIR` Output directory (default: current directory).
-  - `--dryrun`      Print shell commands for file operations instead of performing them.
-  - `--nas-safe`    Apply conservative read/write settings for slow/fragile network storage.
-  - `--max-read-mib-per-sec N` Limit source read throughput during export (MiB/s).
-  - `--max-write-mib-per-sec N` Limit write throughput during export (MiB/s).
-  - `--io-delay-ms N` Sleep N milliseconds after each file/sidecar write operation.
-  - `--io-chunk-kib N` Chunk size for copy/write loops (smaller chunks reduce burstiness).
+- `--out-dir DIR` Output directory (default: current directory).
+- `--dryrun` Print shell commands for file operations instead of performing them.
+- `--nas-safe` Apply conservative read/write settings for slow/fragile network storage.
+- `--max-read-mib-per-sec N` Limit source read throughput during export (MiB/s).
+- `--max-write-mib-per-sec N` Limit write throughput during export (MiB/s).
+- `--io-delay-ms N` Sleep N milliseconds after each file/sidecar write operation.
+- `--io-chunk-kib N` Chunk size for copy/write loops (smaller chunks reduce burstiness).
 
 Notes:
 - `<LIBRARY_PATH>` is the path to the Aperture library bundle.
 - Export logs now include per-job and aggregate effective throughput (MiB/s) to make NAS tuning easier.
-- Aperture album export is not currently supported; export preserves file/folder layout and writes image/XMP metadata.
+- This fork is now focused on one task: exporting an Aperture library into a DigiKam-importable folder hierarchy containing images and XMP sidecars.
 - There is no guarantee that a rendered version exists for each Master image.
   Photos may lack versions because they were never rendered into a Preview, or if
   the library was cleaned.
@@ -89,7 +55,6 @@ Because the tool can create large amounts of I/O (especially when used against a
 ionice -c3 \
 nice -n 19 \
 cargo run --release --bin dumper -- \
-export \
 --nas-safe \
 --max-read-mib-per-sec 26 \
 --max-write-mib-per-sec 26 \
@@ -104,6 +69,25 @@ export \
 Optional helper utilities are in [extras](extras).
 
 For NAS troubleshooting details and usage, see [extras/README.md](extras/README.md).
+
+## Testing
+
+The most important regression coverage in this fork is now the exporter-focused test slice:
+
+```shell
+cargo test --bin dumper exporter::tests:: -- --nocapture
+```
+
+This includes a migration-oriented golden test that exports the synthetic fixture library in [testdata](testdata) and verifies:
+
+- the emitted master and version filenames
+- sidecar creation for both master and exported version outputs
+- DigiKam-critical XMP fields such as title, dates, rating, and pick/color labels
+- master/version linkage fields in the custom `aplib:` namespace
+
+The baseline golden test currently lives in [src/bin/dumper/exporter.rs](/home/jtuttle/src/aplib-extractor/src/bin/dumper/exporter.rs) as `test_export_fixture_library_writes_expected_files_and_digikam_xmp_fields`.
+
+If you change export filenames, XMP mapping, or fixture metadata, update that test and the corresponding fixture notes in [testdata/README.md](/home/jtuttle/src/aplib-extractor/testdata/README.md).
 
 ## Major Changes
 

@@ -1178,6 +1178,7 @@ mod tests {
     use std::collections::HashMap;
 
     use aplib::{AplibObject, Master, PlistLoadable, Version};
+    use exempi2::{PropFlags, Xmp};
 
     fn fixture_path(rel: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1212,16 +1213,37 @@ mod tests {
         .expect("fixture version should parse")
     }
 
+    fn fixture_edited_version() -> Version {
+        Version::from_path(
+            fixture_path(
+                "Database/Versions/2006/11/02/20061102-161812/V6jjzYNdSVu006MPsZkt5w/Version-1.apversion",
+            ),
+            None,
+        )
+        .expect("fixture edited version should parse")
+    }
+
+    fn read_xmp_from_file(path: &Path) -> Xmp {
+        let content = fs::read(path).expect("xmp sidecar should be readable");
+        Xmp::from_buffer(content).expect("xmp sidecar should parse")
+    }
+
+    fn read_xmp_text(path: &Path) -> String {
+        fs::read_to_string(path).expect("xmp sidecar should be utf-8 text")
+    }
+
+    fn assert_xmp_property_eq(xmp: &Xmp, namespace: &str, property: &str, expected: &str) {
+        let mut flags = PropFlags::NONE;
+        let value = xmp
+            .get_property(namespace, property, &mut flags)
+            .unwrap_or_else(|_| panic!("missing XMP property {}:{}", namespace, property));
+        assert_eq!(value.to_str().expect("xmp string should decode"), expected);
+    }
+
     fn make_export_args() -> super::super::ExportArgs {
         super::super::ExportArgs {
-            all: false,
-            albums: false,
-            folders: false,
-            masters: false,
-            versions: false,
             out_dir: None,
             dryrun: false,
-            debug: false,
             nas_safe: false,
             max_write_mib_per_sec: None,
             max_read_mib_per_sec: None,
@@ -1410,8 +1432,6 @@ mod tests {
         let cache = super::super::LibraryCache {
             version_map,
             master_map,
-            album_map: HashMap::new(),
-            folder_map: HashMap::new(),
         };
 
         let jobs = build_export_jobs(&cache, &fixture_library_path());
@@ -1436,8 +1456,6 @@ mod tests {
         let cache = super::super::LibraryCache {
             version_map: HashMap::new(),
             master_map,
-            album_map: HashMap::new(),
-            folder_map: HashMap::new(),
         };
 
         let jobs = build_export_jobs(&cache, Path::new("/tmp/Library.aplibrary"));
@@ -1470,8 +1488,6 @@ mod tests {
         let cache = super::super::LibraryCache {
             version_map,
             master_map,
-            album_map: HashMap::new(),
-            folder_map: HashMap::new(),
         };
 
         let jobs = build_export_jobs(&cache, Path::new("/tmp/Library.aplibrary"));
@@ -1508,8 +1524,6 @@ mod tests {
         let cache = super::super::LibraryCache {
             version_map,
             master_map,
-            album_map: HashMap::new(),
-            folder_map: HashMap::new(),
         };
 
         let jobs = build_export_jobs(&cache, &fixture_library_path());
@@ -1548,6 +1562,159 @@ mod tests {
         assert!(exported_master.with_extension("xmp").exists());
         assert!(exported_version.exists());
         assert!(exported_version.with_extension("xmp").exists());
+    }
+
+    #[test]
+    fn test_export_fixture_library_writes_expected_files_and_digikam_xmp_fields() {
+        let master = fixture_master();
+        let master_uuid = master
+            .uuid()
+            .clone()
+            .expect("fixture master should have uuid");
+
+        let original_version = fixture_version();
+        let edited_version = fixture_edited_version();
+        let edited_version_uuid = edited_version
+            .uuid()
+            .clone()
+            .expect("fixture edited version should have uuid");
+
+        let mut master_map = HashMap::new();
+        master_map.insert(master_uuid.clone(), master.clone());
+
+        let mut version_map = HashMap::new();
+        version_map.insert(
+            original_version
+                .uuid()
+                .clone()
+                .expect("fixture original version should have uuid"),
+            original_version,
+        );
+        version_map.insert(edited_version_uuid.clone(), edited_version.clone());
+
+        let cache = super::super::LibraryCache {
+            version_map,
+            master_map,
+        };
+
+        let jobs = build_export_jobs(&cache, &fixture_library_path());
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].version_uuids, vec![edited_version_uuid.clone()]);
+        assert_eq!(jobs[0].version_filenames.len(), 1);
+
+        let out_dir = std::env::temp_dir().join(format!(
+            "aplib-fixture-export-golden-test-{}",
+            std::process::id()
+        ));
+        if out_dir.exists() {
+            fs::remove_dir_all(&out_dir).expect("temp output dir should be removable");
+        }
+        fs::create_dir_all(&out_dir).expect("temp output dir should be creatable");
+
+        let io_throttle = IoThrottle::from_args(&make_export_args());
+        let keyword_map: HashMap<String, String> = HashMap::new();
+        let export_context = ExportContext {
+            cache: &cache,
+            library_root_path: &fixture_library_path(),
+            flat_keyword_map: &keyword_map,
+            hierarchical_keyword_map: &keyword_map,
+            io_throttle: &io_throttle,
+            checkpoint_log_path: None,
+        };
+
+        export_job_files(&jobs[0], &out_dir, &export_context)
+            .expect("fixture export should succeed");
+
+        let export_dir = out_dir.join(&jobs[0].master_rel_dir);
+        let exported_master = export_dir.join(&jobs[0].master_filename);
+        let exported_master_sidecar = exported_master.with_extension("xmp");
+        let exported_version = export_dir.join(&jobs[0].version_filenames[0]);
+        let exported_version_sidecar = exported_version.with_extension("xmp");
+
+        assert!(exported_master.exists());
+        assert!(exported_master_sidecar.exists());
+        assert!(exported_version.exists());
+        assert!(exported_version_sidecar.exists());
+
+        let mut exported_names = fs::read_dir(&export_dir)
+            .expect("export dir should be readable")
+            .map(|entry| {
+                entry
+                    .expect("dir entry should read")
+                    .file_name()
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        exported_names.sort();
+        assert_eq!(
+            exported_names,
+            vec![
+                jobs[0].master_filename.clone(),
+                exported_master_sidecar
+                    .file_name()
+                    .expect("master sidecar should have filename")
+                    .to_string_lossy()
+                    .to_string(),
+                jobs[0].version_filenames[0].clone(),
+                exported_version_sidecar
+                    .file_name()
+                    .expect("version sidecar should have filename")
+                    .to_string_lossy()
+                    .to_string(),
+            ]
+        );
+
+        let master_xmp = read_xmp_from_file(&exported_master_sidecar);
+        assert_xmp_property_eq(&master_xmp, ns::APLIB, "MasterUUID", &master_uuid);
+        let master_xmp_text = read_xmp_text(&exported_master_sidecar);
+        assert!(master_xmp_text.contains("<dc:title>PICT0019</dc:title>"));
+        assert!(master_xmp_text.contains("<photoshop:Headline>PICT0019</photoshop:Headline>"));
+        assert_xmp_property_eq(
+            &master_xmp,
+            ns::NS_PHOTOSHOP,
+            "DateCreated",
+            &master.create_date.expect("master create date").to_rfc3339(),
+        );
+        assert_xmp_property_eq(
+            &master_xmp,
+            ns::NS_EXIF,
+            "DateTimeOriginal",
+            &master.image_date.expect("master image date").to_rfc3339(),
+        );
+
+        let version_xmp = read_xmp_from_file(&exported_version_sidecar);
+        let version_xmp_text = read_xmp_text(&exported_version_sidecar);
+        assert_xmp_property_eq(&version_xmp, ns::NS_XMP, "VersionUUID", &edited_version_uuid);
+        assert_xmp_property_eq(&version_xmp, ns::APLIB, "MasterUUID", &master_uuid);
+        assert_xmp_property_eq(
+            &version_xmp,
+            ns::APLIB,
+            "MasterFilename",
+            &jobs[0].master_filename,
+        );
+        assert_xmp_property_eq(
+            &version_xmp,
+            ns::NS_XMP,
+            "Rating",
+            &edited_version.rating.expect("version rating").to_string(),
+        );
+        assert!(version_xmp_text.contains("<dc:title>PICT0019</dc:title>"));
+        assert!(version_xmp_text.contains("<photoshop:Headline>PICT0019</photoshop:Headline>"));
+        assert!(version_xmp_text.contains("<digiKam:PickLabel>0</digiKam:PickLabel>"));
+        assert!(version_xmp_text.contains("<digiKam:ColorLabel>0</digiKam:ColorLabel>"));
+        assert_xmp_property_eq(
+            &version_xmp,
+            ns::NS_XMP,
+            "CreateDate",
+            &edited_version.create_date.expect("version create date").to_rfc3339(),
+        );
+        assert_xmp_property_eq(
+            &version_xmp,
+            ns::NS_EXIF,
+            "DateTimeOriginal",
+            &edited_version.image_date.expect("version image date").to_rfc3339(),
+        );
     }
 
     #[test]

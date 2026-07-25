@@ -3,3 +3,4 @@ target
 # Generated NAS diagnostic captures may contain sensitive host/share details.
 extras/nas-diag-*/
 extras/export-2006-only.sh
+extras/rsync-2006-only.sh
