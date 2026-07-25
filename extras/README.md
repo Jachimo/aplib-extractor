@@ -1,6 +1,6 @@
 # Extras
 
-This directory contains optional helper utilities that are not part of the core dumper binary.
+This directory contains optional helper utilities that are not part of the core export binary.
 
 ## NAS Diagnostics Helper
 

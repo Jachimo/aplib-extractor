@@ -6,11 +6,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-mod album;
 pub mod audit;
 mod custominfo;
 mod exif;
-mod folder;
 mod iptc;
 pub mod keyword;
 mod library;
@@ -27,12 +25,8 @@ mod testutils;
 
 use std::path::Path;
 
-pub use album::Album;
-pub use album::Subclass as AlbumSubclass;
 use audit::Report;
 pub use audit::SkipReason;
-pub use folder::Folder;
-pub use folder::Type;
 pub use keyword::Keyword;
 pub use library::{Library, ModelInfo, PROGRESS_NONE};
 pub use master::Master;
@@ -51,10 +45,6 @@ type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Copy, Debug, PartialEq)]
 /// `AplibObject` types.
 pub enum AplibType {
-    /// Album
-    Album,
-    /// Folder (or Project
-    Folder,
     /// Keyword
     Keyword,
     /// Master image

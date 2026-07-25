@@ -1,6 +1,6 @@
 # Aperture Library Test Data
 
-This directory contains a synthetic Aperture Library bundle used for testing the aplib-extractor tool.
+This directory contains a synthetic Aperture Library bundle used for testing the export tool.
 
 ## Structure
 

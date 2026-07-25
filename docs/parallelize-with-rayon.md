@@ -2,7 +2,7 @@
 
 ## Problem Statement
 
-The dumper program is currently single-threaded and only uses 1 CPU (100% of one core) on an 8-core system. Performance is slow when processing large Aperture Libraries.
+The export program is currently single-threaded and only uses 1 CPU (100% of one core) on an 8-core system. Performance is slow when processing large Aperture Libraries.
 
 ## Current Bottlenecks
 
@@ -181,7 +181,7 @@ if errors > 0 {
 
 # 4. Build and test:
 cargo build --release
-cargo run --release --bin dumper -- export ~/Pictures/MyLibrary.aplibrary
+cargo run --release --bin export -- ~/Pictures/MyLibrary.aplibrary
 ```
 
 ## Expected Performance Gains
@@ -244,17 +244,17 @@ If the library is on a network mount and I/O is the bottleneck, consider using `
 
 ```bash
 # Monitor CPU usage during export:
-watch -n 1 'ps aux | grep dumper'
+watch -n 1 'ps aux | grep export'
 
 # Or use htop:
 htop
 
 # Time the full export:
-time cargo run --release --bin dumper -- export ~/Pictures/Library.aplibrary
+time cargo run --release --bin export -- ~/Pictures/Library.aplibrary
 
 # Profile to find remaining bottlenecks:
 cargo install flamegraph
-cargo flamegraph --bin dumper -- export ~/Pictures/Library.aplibrary
+cargo flamegraph --bin export -- ~/Pictures/Library.aplibrary
 ```
 
 ## Next Steps

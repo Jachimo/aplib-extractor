@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::io::stderr;
 use std::path::Path;
 
-use clap::Parser;
+use clap::{error::ErrorKind, CommandFactory, Parser};
 use pbr::ProgressBar;
 use serde::{Deserialize, Serialize};
 
@@ -19,7 +19,13 @@ use aplib::{Library, StoreWrapper, PROGRESS_NONE};
 mod exporter;
 
 #[derive(Debug, Parser)]
-#[command(version)]
+#[command(
+    name = "export",
+    version,
+    about = "Export an Aperture library into a DigiKam-importable folder hierarchy.",
+    long_about = "Export an Aperture library into a DigiKam-importable folder hierarchy containing image files and XMP sidecars.\n\nThe old subcommand-based CLI has been removed; run export [OPTIONS] <LIBRARY_PATH>.",
+    disable_help_subcommand = true
+)]
 struct Args {
     #[command(flatten)]
     export: ExportArgs,
@@ -41,6 +47,7 @@ struct ExportArgs {
     io_delay_ms: Option<u64>,
     #[arg(long, value_name = "KIB")]
     io_chunk_kib: Option<usize>,
+    #[arg(value_name = "LIBRARY_PATH", help = "Path to the Aperture library bundle to export.")]
     path: String,
 }
 
@@ -122,7 +129,22 @@ impl LibraryCache {
     }
 }
 
+fn reject_legacy_command(path: &str) -> Option<clap::Error> {
+    match path {
+        "audit" | "dump" | "export" | "list" | "tree" => Some(Args::command().error(
+            ErrorKind::InvalidSubcommand,
+            format!(
+                "'{path}' is no longer a valid command. Run `export [OPTIONS] <LIBRARY_PATH>` instead."
+            ),
+        )),
+        _ => None,
+    }
+}
+
 fn main() {
     let args = Args::parse();
+    if let Some(error) = reject_legacy_command(&args.export.path) {
+        error.exit();
+    }
     exporter::process_export(&args.export);
 }

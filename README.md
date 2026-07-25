@@ -26,7 +26,7 @@ cargo build --release
 ## Basic Usage
 
 ```shell
-dumper [OPTIONS] <LIBRARY_PATH>
+export [OPTIONS] <LIBRARY_PATH>
 ```
 
 Options:
@@ -43,6 +43,7 @@ Notes:
 - `<LIBRARY_PATH>` is the path to the Aperture library bundle.
 - Export logs now include per-job and aggregate effective throughput (MiB/s) to make NAS tuning easier.
 - This fork is now focused on one task: exporting an Aperture library into a DigiKam-importable folder hierarchy containing images and XMP sidecars.
+- The old `export` subcommand has been removed; if you type it now, the CLI will reject it and point you back to `export [OPTIONS] <LIBRARY_PATH>`.
 - There is no guarantee that a rendered version exists for each Master image.
   Photos may lack versions because they were never rendered into a Preview, or if
   the library was cleaned.
@@ -54,7 +55,7 @@ Because the tool can create large amounts of I/O (especially when used against a
 ```
 ionice -c3 \
 nice -n 19 \
-cargo run --release --bin dumper -- \
+cargo run --release --bin export -- \
 --nas-safe \
 --max-read-mib-per-sec 26 \
 --max-write-mib-per-sec 26 \
@@ -75,7 +76,7 @@ For NAS troubleshooting details and usage, see [extras/README.md](extras/README.
 The most important regression coverage in this fork is now the exporter-focused test slice:
 
 ```shell
-cargo test --bin dumper exporter::tests:: -- --nocapture
+cargo test --bin export exporter::tests:: -- --nocapture
 ```
 
 This includes a migration-oriented golden test that exports the synthetic fixture library in [testdata](testdata) and verifies:

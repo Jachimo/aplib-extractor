@@ -16,9 +16,7 @@ use once_cell::unsync::OnceCell;
 use pbr::ProgressBar;
 use plist::Value;
 
-use crate::album::Album;
 use crate::audit::{audit_get_str_value, Report, Reporter, SkipReason};
-use crate::folder::Folder;
 use crate::keyword::{parse_keywords, Keyword};
 use crate::master::Master;
 use crate::plutils;
@@ -34,8 +32,6 @@ const BUNDLE_IDENTIFIER: &str = "com.apple.Aperture.library";
 // in Database
 //pub const DATAMODEL_VERSION_PLIST: &str = "DataModelVersion.plist";
 pub const KEYWORDS_PLIST: &str = "Keywords.plist";
-pub const ALBUMS_DIR: &str = "Albums";
-pub const FOLDERS_DIR: &str = "Folders";
 pub const VOLUMES_DIR: &str = "Volumes";
 pub const VERSIONS_BASE_DIR: &str = "Versions";
 
@@ -98,11 +94,6 @@ pub struct Library {
     /// Its version string (displayed by get info in the Finder)
     version: String,
 
-    /// All the folders UUID
-    folders: HashSet<String>,
-    /// All the albums UUID
-    albums: HashSet<String>,
-    //    keywords: HashSet<String>,
     /// All the masters UUID
     masters: HashSet<String>,
     /// All the version UUID
@@ -129,9 +120,6 @@ impl Library {
             path: p.as_ref().to_path_buf(),
             version: String::new(),
 
-            folders: HashSet::new(),
-            albums: HashSet::new(),
-            //            keywords: HashSet::new(),
             masters: HashSet::new(),
             versions: HashSet::new(),
             volumes: HashSet::new(),
@@ -369,83 +357,6 @@ impl Library {
             }
         }
         result
-    }
-
-    /// Load items from directory `dir` with extension `ext`
-    /// and store the uuids into `set`
-    fn load_items<T, F>(
-        &mut self,
-        dir: &str,
-        ext: &str,
-        set: &mut HashSet<String>,
-        mut pg: Option<F>,
-    ) where
-        T: PlistLoadable + AplibObject,
-        F: FnMut(u64) -> bool,
-    {
-        let file_list = self.list_recursive_items(dir, ext);
-        let audit = self.auditor.is_some();
-        for file in file_list {
-            let mut report = if audit { Some(Report::new()) } else { None };
-            if let Some(obj) = T::from_path(&file, report.as_mut()) {
-                let mut store = false;
-                if let Some(ref uuid) = *obj.uuid() {
-                    set.insert(uuid.to_owned());
-                    if audit {
-                        self.auditor
-                            .as_mut()
-                            .unwrap()
-                            .parsed(&file.to_string_lossy(), report.unwrap());
-                    }
-                    store = true;
-                }
-                if store {
-                    self.store(T::wrap(obj));
-                }
-            } else {
-                if audit {
-                    self.auditor
-                        .as_mut()
-                        .unwrap()
-                        .skip(&file.to_string_lossy(), SkipReason::ParseFailed);
-                }
-                eprintln!("Failed to decode object from {file:?}");
-            }
-            if let Some(pg) = pg.as_mut() {
-                if !pg(1) {
-                    println!("Cancelled");
-                    return;
-                }
-            }
-        }
-    }
-
-    /// Load albums. Once done the result it cached.
-    pub fn load_albums<F: FnMut(u64) -> bool>(&mut self, pg: Option<F>) {
-        if self.albums.is_empty() {
-            let mut albums: HashSet<String> = HashSet::new();
-            self.load_items::<Album, F>(ALBUMS_DIR, "apalbum", &mut albums, pg);
-            self.albums = albums;
-        }
-    }
-
-    /// Get albums uuids.
-    pub fn albums(&self) -> &HashSet<String> {
-        &self.albums
-    }
-
-    /// Load folders. Once done the result is cached.
-    pub fn load_folders<F: FnMut(u64) -> bool>(&mut self, pg: Option<F>) {
-        if self.folders.is_empty() {
-            let mut folders: HashSet<String> = HashSet::new();
-            self.load_items::<Folder, F>(FOLDERS_DIR, "apfolder", &mut folders, pg);
-            self.folders = folders;
-        }
-    }
-
-    /// Get folders uuids.
-    pub fn folders(&self) -> &HashSet<String> {
-        &self.folders
     }
 
     pub fn list_recursive_items(&self, dir: &str, ext: &str) -> Vec<PathBuf> {

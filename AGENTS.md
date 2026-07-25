@@ -9,35 +9,35 @@ This is a Rust tool for extracting data from Apple Aperture 3.x libraries. It pa
 ## Build and Run Commands
 
 ```bash
-# Build the dumper binary
+# Build the export binary
 cargo build --release
 
-# Run dumper (export-only CLI)
-cargo run --bin dumper -- [OPTIONS] <LIBRARY_PATH>
+# Run export (export-only CLI)
+cargo run --bin export -- [OPTIONS] <LIBRARY_PATH>
 
 # Common commands
-cargo run --bin dumper -- --out-dir ./output ~/Pictures/MyLibrary.aplibrary
-cargo run --bin dumper -- --dryrun ~/Pictures/MyLibrary.aplibrary
+cargo run --bin export -- --out-dir ./output ~/Pictures/MyLibrary.aplibrary
+cargo run --bin export -- --dryrun ~/Pictures/MyLibrary.aplibrary
 
 # Tests (if present)
 cargo test
 
 # Exporter-focused regression tests
-cargo test --bin dumper exporter::tests:: -- --nocapture
+cargo test --bin export exporter::tests:: -- --nocapture
 ```
 
 ## Architecture
 
 ### Core Data Model
 
-The library follows a trait-based architecture for loading Aperture objects:
+The remaining live migration path is centered on a small set of Aperture objects:
 
-- **`AplibObject`** - Base trait for all library objects (Albums, Folders, Masters, Versions, Keywords, Volumes)
-- **`PlistLoadable`** - Trait for objects loaded from `.plist` files
-- **`SqliteLoadable`** - Trait for objects loaded from SQLite database (fallback for Volumes)
-- **`store::Wrapper`** - Enum wrapper for storing heterogeneous objects in a single HashMap
+- **Masters** - original image records and source image paths
+- **Versions** - edited/export variants plus metadata plist locations
+- **Keywords** - keyword hierarchy used to resolve Aperture keyword UUIDs into DigiKam-facing tags
+- **Volumes** - legacy path-resolution support still present in the shared library, but not part of the main export workflow
 
-Objects are stored in the `Library` struct, keyed by UUID strings.
+The export-only binary now caches only master and version objects.
 
 ### Aperture Library Structure
 
@@ -48,14 +48,10 @@ In brief: Aperture Library bundles have two possible directory layouts:
 
 1. **Root-level structure** (possibly older libraries):
    - `Info.plist` - Bundle metadata
-   - `Albums/` - Album definitions (`.apalbum` files)
-   - `Folders/` - Folder/Project definitions (`.apfolder` files)
    - `Masters/` - Original image files
    - `Keywords.plist` - Keyword hierarchy
 
 2. **Database subdirectory structure** (possibly newer libraries):
-   - `Database/Albums/`
-   - `Database/Folders/`
    - `Database/Keywords.plist`
    - `Database/Versions/` - **METADATA ONLY** (`.apversion` and `.apmaster` plist files)
    - `Database/apdb/Library.apdb` - SQLite database
@@ -81,8 +77,6 @@ If this is available, it should be used to resolve ambiguities or bugs in the co
 - **Versions** are edited variants:
   - **Metadata** (plist files): stored in `Database/Versions/YYYY/MM/DD/YYYYMMDD-HHMMSS/UUID/`
   - **Image files**: stored in `Masters/YYYY/MM/DD/YYYYMMDD-HHMMSS/` (same location as masters!)
-- **Projects** are Folders with `folder_type = Project`
-- **Albums** belong to Folders via `parent` UUID
 - **Volumes** represent external storage locations (can be in plist files or SQLite database)
 
 **Key Insight**: Version images and master images share the same directory structure in `Masters/`. 
@@ -90,8 +84,8 @@ Only the metadata plists are separated into `Database/Versions/` with UUID subdi
 
 ### Export Functionality
 
-The `export` command (`src/bin/dumper/exporter.rs`):
-1. Loads all library objects (masters, versions, albums, folders, keywords)
+The export-only CLI (`src/bin/dumper/exporter.rs`):
+1. Loads keywords plus all master/version objects needed for export
 2. Uses a local cache file (`/tmp/aplib_cache_*.bin`) to speed up repeated operations on network-mounted libraries
 3. Generates `ExportJob` structs that group masters with their versions
 4. **Transforms Version paths**: Converts `Database/Versions/.../UUID/` paths to `Masters/.../` paths to locate actual image files
@@ -117,21 +111,23 @@ This test uses the synthetic bundle in [testdata](testdata) and should be treate
 
 When refactoring, keep this test green first, then widen coverage with additional fixture cases.
 
+The legacy subcommand-style invocation has been removed. If a script or example passes `export`, `dump`, `list`, `audit`, or `tree` as the first positional argument, the CLI now rejects it and tells the user to run `export [OPTIONS] <LIBRARY_PATH>` instead.
+
 ### Refactor Safety Rules
 
 When simplifying this fork toward a migration-only tool, apply these rules:
 
 - Preserve the end-to-end export contract before removing inherited features.
-- Run `cargo test --bin dumper exporter::tests:: -- --nocapture` after any export-path change.
+- Run `cargo test --bin export exporter::tests:: -- --nocapture` after any export-path change.
 - Treat `test_export_fixture_library_writes_expected_files_and_digikam_xmp_fields` as the minimum required gate before deleting CLI commands, model fields, or metadata mappings.
 - Prefer deleting code only after the exporter golden test proves the migration workflow still emits the expected files and DigiKam-facing sidecars.
 - If behavior must intentionally change, update the fixture notes in `testdata/README.md` and the golden assertions in `src/bin/dumper/exporter.rs` in the same change.
 
 ### Caching System
 
-The dumper implements a JSON-based caching system in `main.rs`:
+The export binary implements a JSON-based caching system in `main.rs`:
 - Cache file location: `/tmp/aplib_cache_<hash>.bin` (hash based on library path)
-- Caches: Version, Master, Album, and Folder objects
+- Caches: Version and Master objects
 - **Important**: Cache assumes library is read-only (not being actively modified)
 - First run may take 40+ minutes on large network-mounted libraries; subsequent runs use cache
 
@@ -156,7 +152,6 @@ The `xmp.rs` module provides the `ToXmp` trait for converting Aperture metadata 
 - **Version file paths**: The `Version.source_directory` field captures the plist location in `Database/Versions/`, 
   but must be transformed to `Masters/` tree to find actual image files (see `transform_versions_to_masters_path()` in exporter.rs)
 - The code handles missing/corrupted files gracefully with warnings
-- Audit mode (`audit` command) tracks parsing issues and skipped files
 - The SQLite database is only accessed as a fallback when plist files are missing
 
 ## File Organization
@@ -165,7 +160,7 @@ The `xmp.rs` module provides the `ToXmp` trait for converting Aperture metadata 
 - `src/library.rs` - Main Library struct with loading logic
 - `src/bin/dumper/main.rs` - CLI entry point and cache management
 - `src/bin/dumper/exporter.rs` - Export functionality
-- `src/{album,folder,master,version,volume,keyword}.rs` - Individual object types
+- `src/{master,version,volume,keyword}.rs` - Individual object types still used by the live migration path
 - `src/xmp.rs` - XMP metadata generation and sanitization utilities
 - `src/audit.rs` - Auditing/validation framework
 - `testdata/` - Synthetic Aperture fixtures, including the golden migration test bundle
