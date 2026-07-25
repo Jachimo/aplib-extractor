@@ -22,6 +22,20 @@ pub mod ns {
     pub const NS_DIGIKAM: &str = "http://www.digikam.org/ns/1.0/";
 }
 
+/// Register non-standard namespaces we write during export.
+/// This is safe to call repeatedly.
+pub fn register_export_namespaces() {
+    if let Err(e) = exempi2::register_namespace(ns::APLIB, "aplib") {
+        eprintln!("Warning: Failed to register XMP namespace '{}': {:?}", ns::APLIB, e);
+    }
+    if let Err(e) = exempi2::register_namespace(ns::NS_DIGIKAM, "digiKam") {
+        eprintln!(
+            "Warning: Failed to register XMP namespace '{}': {:?}",
+            ns::NS_DIGIKAM, e
+        );
+    }
+}
+
 #[derive(Clone, Debug)]
 /// Define a property
 pub struct XmpProperty {

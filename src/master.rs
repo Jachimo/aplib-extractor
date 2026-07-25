@@ -197,12 +197,13 @@ impl AplibObject for Master {
 impl ToXmp for Master {
     fn to_xmp(&self, xmp: &mut Xmp) -> bool {
 
+        crate::xmp::register_export_namespaces();
         let mut ok = true;
 
         // Custom Aperture namespace for Aperture-specific fields
         let aplib_ns = ns::APLIB;
         let xmp_ns = "http://ns.adobe.com/xap/1.0/";
-        let _exif_ns = "http://ns.adobe.com/exif/1.0/";  // not currently used; reserved for EXIF-specific fields
+        let exif_ns = "http://ns.adobe.com/exif/1.0/";
         let tiff_ns = "http://ns.adobe.com/tiff/1.0/";
 
         // UUID
@@ -239,6 +240,13 @@ impl ToXmp for Master {
         if let Some(ref name) = self.name {
             let clean = crate::xmp::sanitize_for_xmp(name);
             ok &= xmp.set_property(xmp_ns, "Title", &clean, PropFlags::NONE).is_ok();
+            // Mirror title into broadly recognized XMP fields for importers like digiKam.
+            ok &= xmp
+                .set_property(crate::xmp::ns::NS_DC, "title", &clean, PropFlags::NONE)
+                .is_ok();
+            ok &= xmp
+                .set_property(crate::xmp::ns::NS_PHOTOSHOP, "Headline", &clean, PropFlags::NONE)
+                .is_ok();
         }
         // Original Version Name
         if let Some(ref original_version_name) = self.original_version_name {
@@ -286,11 +294,19 @@ impl ToXmp for Master {
         }
         // Create Date
         if let Some(ref create_date) = self.create_date {
-            ok &= xmp.set_property(xmp_ns, "CreateDate", &create_date.to_rfc3339(), PropFlags::NONE).is_ok();
+            let date = create_date.to_rfc3339();
+            ok &= xmp.set_property(xmp_ns, "CreateDate", &date, PropFlags::NONE).is_ok();
+            ok &= xmp
+                .set_property(crate::xmp::ns::NS_PHOTOSHOP, "DateCreated", &date, PropFlags::NONE)
+                .is_ok();
         }
         // Image Date
         if let Some(ref image_date) = self.image_date {
-            ok &= xmp.set_property(xmp_ns, "ImageDate", &image_date.to_rfc3339(), PropFlags::NONE).is_ok();
+            let date = image_date.to_rfc3339();
+            ok &= xmp.set_property(xmp_ns, "ImageDate", &date, PropFlags::NONE).is_ok();
+            ok &= xmp
+                .set_property(exif_ns, "DateTimeOriginal", &date, PropFlags::NONE)
+                .is_ok();
         }
         // File Creation Date
         if let Some(ref file_creation_date) = self.file_creation_date {

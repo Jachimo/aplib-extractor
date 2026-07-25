@@ -407,6 +407,33 @@ fn write_sidecar_with_throttle(
     })
 }
 
+fn materialize_metadata_only_version_image(
+    master_export_path: &Path,
+    version_export_path: &Path,
+    throttle: &IoThrottle,
+) -> std::io::Result<IoStats> {
+    if version_export_path == master_export_path {
+        return Ok(IoStats::default());
+    }
+
+    if version_export_path.exists() {
+        fs::remove_file(version_export_path)?;
+    }
+
+    match fs::hard_link(master_export_path, version_export_path) {
+        Ok(()) => {
+            throttle.sleep_between_operations();
+            let file_size = fs::metadata(master_export_path)?.len();
+            Ok(IoStats {
+                read_bytes: 0,
+                written_bytes: file_size,
+                elapsed: Duration::default(),
+            })
+        }
+        Err(_) => copy_file_with_throttle(master_export_path, version_export_path, throttle),
+    }
+}
+
 fn append_checkpoint_log(log_path: &Path, entry: &str) {
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
         let _ = writeln!(file, "{entry}");
@@ -574,14 +601,41 @@ fn export_job_files(
 
         let dest = version_out_dir.join(dest_name);
 
-        // Only copy image file if it's different from the master
+        // Ensure every version sidecar has a matching image basename for importers like DigiKam.
+        // Metadata-only versions may point at the master image path, so materialize a version image
+        // filename (hard-link when possible, copy fallback).
         if is_same_as_master {
             eprintln!(
-                "  Version {} (metadata-only, using master image)",
+                "  Version {} (metadata-only, materializing version image from master)",
                 version_uuid
             );
-            // Don't copy the file - it's the same as the master
-            // We'll still create the XMP sidecar below
+            let materialized_version = match materialize_metadata_only_version_image(
+                &master_out,
+                &dest,
+                ctx.io_throttle,
+            ) {
+                Ok(stats) => stats,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    eprintln!(
+                        "Warning: could not materialize metadata-only version {} because master export file is missing at {}",
+                        version_uuid,
+                        master_out.display()
+                    );
+                    continue;
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Error materializing metadata-only version file:\n  Version UUID: {}\n  Source: {}\n  Dest:   {}\n  Error:  {} (os error: {:?})",
+                        version_uuid,
+                        master_out.display(),
+                        dest.display(),
+                        e,
+                        e.raw_os_error()
+                    );
+                    return Err(e);
+                }
+            };
+            io_stats.add(materialized_version);
         } else {
             eprintln!("  Version {} (separate rendered image)", version_uuid);
             let copied_version = match copy_file_with_throttle(src, &dest, ctx.io_throttle) {
@@ -1427,6 +1481,73 @@ mod tests {
         assert!(jobs[0].version_paths[0]
             .to_string_lossy()
             .contains("CACHE_OUT_OF_DATE"));
+    }
+
+    #[test]
+    fn test_export_job_files_materializes_metadata_only_version_image() {
+        let master = fixture_master();
+        let master_uuid = master
+            .uuid()
+            .clone()
+            .expect("fixture master should have uuid");
+
+        let mut version = fixture_version();
+        let version_uuid = version
+            .uuid()
+            .clone()
+            .expect("fixture version should have uuid");
+        version.master_uuid = Some(master_uuid.clone());
+        version.is_original = Some(false);
+
+        let mut master_map = HashMap::new();
+        master_map.insert(master_uuid.clone(), master);
+
+        let mut version_map = HashMap::new();
+        version_map.insert(version_uuid, version);
+
+        let cache = super::super::LibraryCache {
+            version_map,
+            master_map,
+            album_map: HashMap::new(),
+            folder_map: HashMap::new(),
+        };
+
+        let jobs = build_export_jobs(&cache, &fixture_library_path());
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].version_paths.len(), 1);
+        assert_eq!(jobs[0].version_paths[0], jobs[0].master_path);
+
+        let out_dir = std::env::temp_dir().join(format!(
+            "aplib-metadata-only-export-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&out_dir).expect("temp output dir should be creatable");
+
+        let io_throttle = IoThrottle::from_args(&make_export_args());
+        let keyword_map: HashMap<String, String> = HashMap::new();
+        let export_context = ExportContext {
+            cache: &cache,
+            library_root_path: &fixture_library_path(),
+            flat_keyword_map: &keyword_map,
+            hierarchical_keyword_map: &keyword_map,
+            io_throttle: &io_throttle,
+            checkpoint_log_path: None,
+        };
+
+        export_job_files(&jobs[0], &out_dir, &export_context)
+            .expect("export should succeed for metadata-only version");
+
+        let exported_master = out_dir
+            .join(&jobs[0].master_rel_dir)
+            .join(&jobs[0].master_filename);
+        let exported_version = out_dir
+            .join(&jobs[0].master_rel_dir)
+            .join(&jobs[0].version_filenames[0]);
+
+        assert!(exported_master.exists());
+        assert!(exported_master.with_extension("xmp").exists());
+        assert!(exported_version.exists());
+        assert!(exported_version.with_extension("xmp").exists());
     }
 
     #[test]

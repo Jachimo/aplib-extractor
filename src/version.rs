@@ -25,6 +25,18 @@ use crate::PlistLoadable;
 use crate::xmp::ToXmp;
 use exempi2::{Xmp, PropFlags};
 
+fn digikam_xmp_label_name(color_label: i64) -> Option<&'static str> {
+    // digiKam reads string fallback values for a limited Lightroom-style set.
+    match color_label {
+        1 => Some("Red"),
+        3 => Some("Yellow"),
+        4 => Some("Green"),
+        5 => Some("Blue"),
+        6 => Some("Purple"),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// A rendered image. There is one for the orignal, and one per
 /// actual version. `Version` are associated to a `Master`.
@@ -189,10 +201,17 @@ impl AplibObject for Version {
 
 impl ToXmp for Version {
     fn to_xmp(&self, xmp: &mut Xmp) -> bool {
+        crate::xmp::register_export_namespaces();
         let mut ok = true;
+        let xmp_ns = crate::xmp::ns::NS_XMP;
+        let dc_ns = crate::xmp::ns::NS_DC;
+        let tiff_ns = crate::xmp::ns::NS_TIFF;
+        let exif_ns = crate::xmp::ns::NS_EXIF;
+        let photoshop_ns = crate::xmp::ns::NS_PHOTOSHOP;
+
         // VersionUUID
         if let Some(ref uuid) = self.uuid {
-            if xmp.set_property("http://ns.adobe.com/xap/1.0/", "VersionUUID", uuid, PropFlags::NONE).is_err() {
+            if xmp.set_property(xmp_ns, "VersionUUID", uuid, PropFlags::NONE).is_err() {
                 eprintln!("Warning: Failed to write XMP property VersionUUID for Version {}", uuid);
                 ok = false;
             }
@@ -200,12 +219,111 @@ impl ToXmp for Version {
         // VersionFileName
         if let Some(ref file_name) = self.file_name {
             let clean = crate::xmp::sanitize_for_xmp(file_name);
-            if xmp.set_property("http://ns.adobe.com/xap/1.0/", "VersionFileName", &clean, PropFlags::NONE).is_err() {
+            if xmp.set_property(xmp_ns, "VersionFileName", &clean, PropFlags::NONE).is_err() {
                 let uuid_str = self.uuid.as_deref().unwrap_or("unknown");
                 eprintln!("Warning: Failed to write XMP property VersionFileName for Version {}", uuid_str);
                 ok = false;
             }
+            if xmp.set_property(tiff_ns, "FileName", &clean, PropFlags::NONE).is_err() {
+                let uuid_str = self.uuid.as_deref().unwrap_or("unknown");
+                eprintln!("Warning: Failed to write TIFF FileName for Version {}", uuid_str);
+                ok = false;
+            }
         }
+
+        // Mirror commonly useful fields into standard namespaces for wider importer support.
+        if let Some(ref name) = self.name {
+            let clean = crate::xmp::sanitize_for_xmp(name);
+            if xmp.set_property(dc_ns, "title", &clean, PropFlags::NONE).is_err() {
+                let uuid_str = self.uuid.as_deref().unwrap_or("unknown");
+                eprintln!("Warning: Failed to write dc:title for Version {}", uuid_str);
+                ok = false;
+            }
+            if xmp.set_property(photoshop_ns, "Headline", &clean, PropFlags::NONE).is_err() {
+                let uuid_str = self.uuid.as_deref().unwrap_or("unknown");
+                eprintln!("Warning: Failed to write photoshop:Headline for Version {}", uuid_str);
+                ok = false;
+            }
+        }
+
+        if let Some(rating) = self.rating {
+            if xmp.set_property(xmp_ns, "Rating", &rating.to_string(), PropFlags::NONE).is_err() {
+                let uuid_str = self.uuid.as_deref().unwrap_or("unknown");
+                eprintln!("Warning: Failed to write xmp:Rating for Version {}", uuid_str);
+                ok = false;
+            }
+        }
+
+        // digiKam-specific labels for robust tag import.
+        if let Some(color_label_index) = self.colour_label_index {
+            let color_label = color_label_index.clamp(0, 9);
+            if xmp
+                .set_property(crate::xmp::ns::NS_DIGIKAM, "ColorLabel", &color_label.to_string(), PropFlags::NONE)
+                .is_err()
+            {
+                let uuid_str = self.uuid.as_deref().unwrap_or("unknown");
+                eprintln!("Warning: Failed to write digiKam ColorLabel for Version {}", uuid_str);
+                ok = false;
+            }
+
+            if xmp
+                .set_property(photoshop_ns, "Urgency", &color_label.to_string(), PropFlags::NONE)
+                .is_err()
+            {
+                let uuid_str = self.uuid.as_deref().unwrap_or("unknown");
+                eprintln!("Warning: Failed to write photoshop:Urgency for Version {}", uuid_str);
+                ok = false;
+            }
+
+            if let Some(label_name) = digikam_xmp_label_name(color_label) {
+                if xmp
+                    .set_property(xmp_ns, "Label", label_name, PropFlags::NONE)
+                    .is_err()
+                {
+                    let uuid_str = self.uuid.as_deref().unwrap_or("unknown");
+                    eprintln!("Warning: Failed to write xmp:Label for Version {}", uuid_str);
+                    ok = false;
+                }
+            }
+        }
+
+        if let Some(is_flagged) = self.is_flagged {
+            // Aperture has a binary flag. Map to digiKam pick labels:
+            // flagged -> Pending (2), not flagged -> None (0).
+            let pick_label = if is_flagged { 2 } else { 0 };
+            if xmp
+                .set_property(crate::xmp::ns::NS_DIGIKAM, "PickLabel", &pick_label.to_string(), PropFlags::NONE)
+                .is_err()
+            {
+                let uuid_str = self.uuid.as_deref().unwrap_or("unknown");
+                eprintln!("Warning: Failed to write digiKam PickLabel for Version {}", uuid_str);
+                ok = false;
+            }
+        }
+
+        if let Some(ref create_date) = self.create_date {
+            let date = create_date.to_rfc3339();
+            if xmp.set_property(xmp_ns, "CreateDate", &date, PropFlags::NONE).is_err() {
+                let uuid_str = self.uuid.as_deref().unwrap_or("unknown");
+                eprintln!("Warning: Failed to write xmp:CreateDate for Version {}", uuid_str);
+                ok = false;
+            }
+            if xmp.set_property(photoshop_ns, "DateCreated", &date, PropFlags::NONE).is_err() {
+                let uuid_str = self.uuid.as_deref().unwrap_or("unknown");
+                eprintln!("Warning: Failed to write photoshop:DateCreated for Version {}", uuid_str);
+                ok = false;
+            }
+        }
+
+        if let Some(ref image_date) = self.image_date {
+            let date = image_date.to_rfc3339();
+            if xmp.set_property(exif_ns, "DateTimeOriginal", &date, PropFlags::NONE).is_err() {
+                let uuid_str = self.uuid.as_deref().unwrap_or("unknown");
+                eprintln!("Warning: Failed to write exif:DateTimeOriginal for Version {}", uuid_str);
+                ok = false;
+            }
+        }
+
         // Other custom fields in app-specific XMP namespace...
         if let Some(ref custom) = self.custom_aplib_fields {
             for (k, v) in custom {
@@ -217,6 +335,23 @@ impl ToXmp for Version {
                 }
             }
         }
+
+        if let Some(ref exif) = self.exif {
+            if !exif.to_xmp(xmp) {
+                let uuid_str = self.uuid.as_deref().unwrap_or("unknown");
+                eprintln!("Warning: Failed to fully write EXIF-derived XMP fields for Version {}", uuid_str);
+                ok = false;
+            }
+        }
+
+        if let Some(ref iptc) = self.iptc {
+            if !iptc.to_xmp(xmp) {
+                let uuid_str = self.uuid.as_deref().unwrap_or("unknown");
+                eprintln!("Warning: Failed to fully write IPTC-derived XMP fields for Version {}", uuid_str);
+                ok = false;
+            }
+        }
+
         // Write keywords into Dublin Core (flat, for compatibility)
         if let Some(ref keywords) = self.keywords {
             crate::xmp::write_rdf_bag(xmp, crate::xmp::ns::NS_DC, "subject", keywords);
