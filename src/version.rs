@@ -231,21 +231,6 @@ impl ToXmp for Version {
             }
         }
 
-        // Mirror commonly useful fields into standard namespaces for wider importer support.
-        if let Some(ref name) = self.name {
-            let clean = crate::xmp::sanitize_for_xmp(name);
-            if xmp.set_property(dc_ns, "title", &clean, PropFlags::NONE).is_err() {
-                let uuid_str = self.uuid.as_deref().unwrap_or("unknown");
-                eprintln!("Warning: Failed to write dc:title for Version {}", uuid_str);
-                ok = false;
-            }
-            if xmp.set_property(photoshop_ns, "Headline", &clean, PropFlags::NONE).is_err() {
-                let uuid_str = self.uuid.as_deref().unwrap_or("unknown");
-                eprintln!("Warning: Failed to write photoshop:Headline for Version {}", uuid_str);
-                ok = false;
-            }
-        }
-
         if let Some(rating) = self.rating {
             if xmp.set_property(xmp_ns, "Rating", &rating.to_string(), PropFlags::NONE).is_err() {
                 let uuid_str = self.uuid.as_deref().unwrap_or("unknown");
@@ -348,6 +333,21 @@ impl ToXmp for Version {
             if !iptc.to_xmp(xmp) {
                 let uuid_str = self.uuid.as_deref().unwrap_or("unknown");
                 eprintln!("Warning: Failed to fully write IPTC-derived XMP fields for Version {}", uuid_str);
+                ok = false;
+            }
+        }
+
+        // Mirror commonly useful fields into standard namespaces for wider importer support.
+        if let Some(ref name) = self.name {
+            let clean = crate::xmp::sanitize_for_xmp(name);
+            if !crate::xmp::write_lang_alt_text(xmp, dc_ns, "title", &clean) {
+                let uuid_str = self.uuid.as_deref().unwrap_or("unknown");
+                eprintln!("Warning: Failed to write dc:title for Version {}", uuid_str);
+                ok = false;
+            }
+            if xmp.set_property(photoshop_ns, "Headline", &clean, PropFlags::NONE).is_err() {
+                let uuid_str = self.uuid.as_deref().unwrap_or("unknown");
+                eprintln!("Warning: Failed to write photoshop:Headline for Version {}", uuid_str);
                 ok = false;
             }
         }

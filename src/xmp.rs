@@ -132,27 +132,40 @@ pub fn sanitize_for_xmp(value: &str) -> String {
         .collect()
 }
 
+/// Write localized alt-text using the standard x-default form used by XMP consumers.
+pub fn write_lang_alt_text(xmp: &mut Xmp, namespace: &str, property: &str, value: &str) -> bool {
+    let clean = sanitize_for_xmp(value);
+    let _ = xmp.delete_property(namespace, property);
+    xmp.set_localized_text(
+        namespace,
+        property,
+        "",
+        "x-default",
+        &clean,
+        exempi2::PropFlags::ARRAY_IS_ALTTEXT,
+    )
+    .is_ok()
+}
+
 /// Vector of strings -> rdf:Bag property in XMP
 pub fn write_rdf_bag(xmp: &mut Xmp, namespace: &str, property: &str, values: &[String]) {
     if values.is_empty() {
         return;
     }
-    // Create the array property first
-    if let Err(e) = xmp.set_property(namespace, property, "", exempi2::PropFlags::VALUE_IS_ARRAY) {
-        eprintln!(
-            "Warning: Failed to create XMP array '{}:{}': {:?}",
-            namespace, property, e
-        );
-        return;
-    }
-    for (i, v) in values.iter().enumerate() {
-        let index = (i as i32) + 1;
+    let _ = xmp.delete_property(namespace, property);
+    for v in values {
         let clean = sanitize_for_xmp(v);
-        let result = xmp.set_array_item(namespace, property, index, &clean, exempi2::PropFlags::NONE);
+        let result = xmp.append_array_item(
+            namespace,
+            property,
+            exempi2::PropFlags::ARRAY_IS_UNORDERED,
+            &clean,
+            exempi2::PropFlags::NONE,
+        );
         if let Err(e) = result {
             eprintln!(
-                "Warning: Failed to set XMP array item '{}:{}[{}]': {:?}",
-                namespace, property, index, e
+                "Warning: Failed to append XMP bag item '{}:{}': {:?}",
+                namespace, property, e
             );
         }
     }
@@ -163,27 +176,20 @@ pub fn write_rdf_seq(xmp: &mut Xmp, namespace: &str, property: &str, values: &[S
     if values.is_empty() {
         return;
     }
-    // Create the ordered array property first
-    if let Err(e) = xmp.set_property(
-        namespace,
-        property,
-        "",
-        exempi2::PropFlags::VALUE_IS_ARRAY | exempi2::PropFlags::ARRAY_IS_ORDERED,
-    ) {
-        eprintln!(
-            "Warning: Failed to create XMP ordered array '{}:{}': {:?}",
-            namespace, property, e
-        );
-        return;
-    }
-    for (i, v) in values.iter().enumerate() {
-        let index = (i as i32) + 1;
+    let _ = xmp.delete_property(namespace, property);
+    for v in values {
         let clean = sanitize_for_xmp(v);
-        let result = xmp.set_array_item(namespace, property, index, &clean, exempi2::PropFlags::NONE);
+        let result = xmp.append_array_item(
+            namespace,
+            property,
+            exempi2::PropFlags::ARRAY_IS_ORDERED,
+            &clean,
+            exempi2::PropFlags::NONE,
+        );
         if let Err(e) = result {
             eprintln!(
-                "Warning: Failed to set XMP array item '{}:{}[{}]': {:?}",
-                namespace, property, index, e
+                "Warning: Failed to append XMP seq item '{}:{}': {:?}",
+                namespace, property, e
             );
         }
     }
@@ -245,6 +251,44 @@ mod tests {
         let value = xmp.get_property(prop.ns, prop.property, &mut options);
         assert!(value.is_ok());
         assert_eq!(value.unwrap().to_str(), Ok("sRGB IEC61966-2.1"));
+    }
+
+    #[test]
+    fn test_write_lang_alt_text_serializes_x_default() {
+        let mut xmp = Xmp::new();
+
+        assert!(write_lang_alt_text(&mut xmp, ns::NS_DC, "title", "Example Title"));
+
+        let serialized = xmp
+            .serialize(exempi2::SerialFlags::default(), 0)
+            .expect("xmp should serialize")
+            .to_string();
+        assert!(serialized.contains("<dc:title>"));
+        assert!(serialized.contains("xml:lang=\"x-default\">Example Title</rdf:li>"));
+    }
+
+    #[test]
+    fn test_write_rdf_bag_replaces_scalar_property() {
+        let mut xmp = Xmp::new();
+
+        xmp.set_property(ns::NS_DC, "subject", "legacy", exempi2::PropFlags::NONE)
+            .expect("scalar property should be written");
+        write_rdf_bag(
+            &mut xmp,
+            ns::NS_DC,
+            "subject",
+            &["Nature".to_string(), "Landscape".to_string()],
+        );
+
+        let serialized = xmp
+            .serialize(exempi2::SerialFlags::default(), 0)
+            .expect("xmp should serialize")
+            .to_string();
+        assert!(serialized.contains("<dc:subject>"));
+        assert!(serialized.contains("<rdf:Bag>"));
+        assert!(serialized.contains("<rdf:li>Nature</rdf:li>"));
+        assert!(serialized.contains("<rdf:li>Landscape</rdf:li>"));
+        assert!(!serialized.contains(">legacy<"));
     }
 }
 

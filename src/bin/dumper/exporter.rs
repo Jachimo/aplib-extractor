@@ -1068,6 +1068,13 @@ pub fn process_export(args: &super::ExportArgs) {
         use std::hash::{Hash, Hasher};
         let mut hasher = DefaultHasher::new();
         args.path.hash(&mut hasher);
+        if let Ok(metadata) = fs::metadata(&args.path) {
+            if let Ok(modified) = metadata.modified() {
+                if let Ok(elapsed) = modified.duration_since(std::time::UNIX_EPOCH) {
+                    elapsed.as_nanos().hash(&mut hasher);
+                }
+            }
+        }
         let hash = hasher.finish();
         PathBuf::from(format!("/tmp/aplib_cache_{hash:x}.bin"))
     };
@@ -1668,7 +1675,8 @@ mod tests {
         let master_xmp = read_xmp_from_file(&exported_master_sidecar);
         assert_xmp_property_eq(&master_xmp, ns::APLIB, "MasterUUID", &master_uuid);
         let master_xmp_text = read_xmp_text(&exported_master_sidecar);
-        assert!(master_xmp_text.contains("<dc:title>PICT0019</dc:title>"));
+        assert!(master_xmp_text.contains("<dc:title>"));
+        assert!(master_xmp_text.contains("xml:lang=\"x-default\">PICT0019</rdf:li>"));
         assert!(master_xmp_text.contains("<photoshop:Headline>PICT0019</photoshop:Headline>"));
         assert_xmp_property_eq(
             &master_xmp,
@@ -1699,7 +1707,8 @@ mod tests {
             "Rating",
             &edited_version.rating.expect("version rating").to_string(),
         );
-        assert!(version_xmp_text.contains("<dc:title>PICT0019</dc:title>"));
+        assert!(version_xmp_text.contains("<dc:title>"));
+        assert!(version_xmp_text.contains("xml:lang=\"x-default\">PICT0019</rdf:li>"));
         assert!(version_xmp_text.contains("<photoshop:Headline>PICT0019</photoshop:Headline>"));
         assert!(version_xmp_text.contains("<digiKam:PickLabel>0</digiKam:PickLabel>"));
         assert!(version_xmp_text.contains("<digiKam:ColorLabel>0</digiKam:ColorLabel>"));

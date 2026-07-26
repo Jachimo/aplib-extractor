@@ -1,112 +1,295 @@
-# Aperture Library Extractor
+# Aperture Library Exporter
 
-> This is a fork of [hfiguiere/aplib-extractor][orig], with various modifications (and probably *many* new bugs) added.  
-> Please do not bother the upstream maintainer with questions about this version.
+This repository is a migration-focused fork of [hfiguiere/aplib-extractor][orig].
+It is aimed at one job: exporting an Apple Aperture 3.x library into a
+folder tree that photo managers such as DigiKam can import.
+
+The current binary is `export`. It copies master and version images out of an
+`.aplibrary` bundle and writes XMP sidecars that preserve Aperture provenance
+while also mirroring key fields into DigiKam-friendly namespaces.
+
+> This fork has diverged significantly from upstream. Questions about behavior
+> in this repository should be directed here, not to the upstream maintainer.
 
 [orig]: https://github.com/hfiguiere/aplib-extractor
 
-Purpose: Extract data from Apple Aperture libraries in usable formats,
-to aid migration to other photo management applications.
+## What It Does
 
-Supported versions of Aperture are 3.x up to 3.6 (the final version).
+- Reads Apple Aperture 3.x libraries up to 3.6.
+- Exports original masters and rendered versions into a normal filesystem
+  hierarchy.
+- Writes XMP sidecars for both masters and versions.
+- Preserves Aperture-specific provenance in a custom `aplib:` namespace.
+- Mirrors commonly useful fields into standard and DigiKam-consumed XMP fields,
+  including titles, dates, ratings, pick/color labels, and keyword tags.
+- Resolves Aperture keyword UUIDs into readable tag names.
+- Materializes metadata-only versions so each exported version sidecar has a
+  matching same-basename image file for importers like DigiKam.
+- Uses a local cache to make repeated exports from large or network-mounted
+  libraries much faster.
 
-Written in Rust.
+## What This Fork No Longer Does
 
-Requires:
-- Rust and Cargo ([install instructions](https://rust-lang.org/tools/install/))
-- exempi (try `sudo apt install libexempi-dev`)
-- SQLite (try `sudo apt install libsqlite3-dev`)
+This repository is no longer a general-purpose Aperture inspection tool.
 
-## Building
+- The old subcommand-based CLI is gone.
+- `dump`, `list`, `audit`, and `tree` are not supported top-level commands.
+- The supported entrypoint is `export [OPTIONS] <LIBRARY_PATH>`.
+
+## Requirements
+
+- Rust and Cargo
+- `libexempi-dev`
+- `libsqlite3-dev`
+
+On Debian or Ubuntu:
+
+```shell
+sudo apt install cargo libexempi-dev libsqlite3-dev
+```
+
+## Build
 
 ```shell
 cargo build --release
 ```
 
-## Basic Usage
+The resulting binary is:
+
+```shell
+target/release/export
+```
+
+## Usage
 
 ```shell
 export [OPTIONS] <LIBRARY_PATH>
 ```
 
-Options:
+Examples:
 
-- `--out-dir DIR` Output directory (default: current directory).
-- `--dryrun` Print shell commands for file operations instead of performing them.
-- `--nas-safe` Apply conservative read/write settings for slow/fragile network storage.
-- `--max-read-mib-per-sec N` Limit source read throughput during export (MiB/s).
-- `--max-write-mib-per-sec N` Limit write throughput during export (MiB/s).
-- `--io-delay-ms N` Sleep N milliseconds after each file/sidecar write operation.
-- `--io-chunk-kib N` Chunk size for copy/write loops (smaller chunks reduce burstiness).
-
-Notes:
-- `<LIBRARY_PATH>` is the path to the Aperture library bundle.
-- Export logs now include per-job and aggregate effective throughput (MiB/s) to make NAS tuning easier.
-- This fork is now focused on one task: exporting an Aperture library into a DigiKam-importable folder hierarchy containing images and XMP sidecars.
-- The old `export` subcommand has been removed; if you type it now, the CLI will reject it and point you back to `export [OPTIONS] <LIBRARY_PATH>`.
-- There is no guarantee that a rendered version exists for each Master image.
-  Photos may lack versions because they were never rendered into a Preview, or if
-  the library was cleaned.
-
-## Examples
-
-Because the tool can create large amounts of I/O (especially when used against a remote file server or NAS head), it can be combined with `ionice` and built-in rate limits to manage resource usage:
-
+```shell
+cargo run --release --bin export -- \
+  --out-dir ./exported-library \
+  ~/Pictures/Aperture\ Library.aplibrary
 ```
+
+```shell
+cargo run --release --bin export -- \
+  --dryrun \
+  --out-dir ./export-preview \
+  ~/Pictures/Aperture\ Library.aplibrary
+```
+
+### Options
+
+- `--out-dir DIR`: output directory. Defaults to the current directory.
+- `--dryrun`: plan the export and print file operations without writing output.
+- `--nas-safe`: apply conservative I/O defaults for fragile NAS or external
+  storage.
+- `--max-read-mib-per-sec N`: throttle source reads.
+- `--max-write-mib-per-sec N`: throttle destination writes.
+- `--io-delay-ms N`: sleep after each file or sidecar write.
+- `--io-chunk-kib N`: adjust copy chunk size.
+
+`--nas-safe` currently implies conservative defaults when explicit overrides are
+not provided:
+
+- read throttle: `4 MiB/s`
+- write throttle: `4 MiB/s`
+- write delay: `20 ms`
+- copy chunk size: `64 KiB`
+
+## Output Contract
+
+The exporter writes a filesystem tree rooted at `--out-dir` that preserves the
+date-based structure used inside Aperture masters.
+
+For each export job it writes:
+
+- the master image file
+- a master XMP sidecar with the same basename
+- zero or more version image files
+- a version XMP sidecar for each version image
+
+Important details:
+
+- Some Aperture versions have metadata but no separate rendered image file.
+  In those cases the exporter materializes a version image filename from the
+  master so that the sidecar still has a matching sibling image for DigiKam.
+- Sidecars include both standard XMP fields and custom `aplib:` provenance.
+- A run also creates `export-checkpoint.log` in the output directory.
+
+## Metadata Written For DigiKam
+
+The exporter writes Aperture metadata into XMP with two goals:
+
+1. Preserve original Aperture information.
+2. Emit fields that DigiKam and similar tools are likely to consume.
+
+Current sidecars may include:
+
+- `dc:title` as standard XMP alt-text
+- `photoshop:Headline`
+- `xmp:CreateDate`
+- `exif:DateTimeOriginal`
+- `xmp:Rating`
+- `digiKam:PickLabel`
+- `digiKam:ColorLabel`
+- `dc:subject` keyword bags when flat keyword values are available
+- `digiKam:TagsList` hierarchical tags when resolved keyword paths are available
+- `aplib:*` provenance fields such as Aperture UUIDs and original library paths
+
+This dual-writing is intentional: `aplib:*` remains the canonical migration
+record, while standard and DigiKam-oriented fields improve import behavior.
+
+## Caching
+
+Repeated exports reuse a local cache under `/tmp/aplib_cache_*.bin`.
+
+- First runs can be slow on large libraries, especially over SMB/NFS.
+- Later runs can reuse cached master/version metadata.
+- The cache assumes the source Aperture library is effectively read-only.
+
+If export planning looks wrong after changing the source subset or library
+contents, clear old caches and rerun:
+
+```shell
+rm -f /tmp/aplib_cache_*.bin
+```
+
+## End-to-End Example: Migrate a Small Aperture Library to DigiKam
+
+Assume you have:
+
+- Aperture library: `~/Pictures/TestLibrary.aplibrary`
+- Destination export directory: `~/Migrated/TestLibrary-export`
+
+### 1. Dry-run the export
+
+```shell
+cargo run --release --bin export -- \
+  --dryrun \
+  --out-dir ~/Migrated/TestLibrary-export \
+  ~/Pictures/TestLibrary.aplibrary
+```
+
+Use this to confirm that the library opens, jobs are discovered, and the output
+path is what you expect.
+
+### 2. Run the real export
+
+```shell
+cargo run --release --bin export -- \
+  --out-dir ~/Migrated/TestLibrary-export \
+  ~/Pictures/TestLibrary.aplibrary
+```
+
+If the source library lives on a NAS or flaky external storage, prefer:
+
+```shell
+cargo run --release --bin export -- \
+  --nas-safe \
+  --out-dir ~/Migrated/TestLibrary-export \
+  ~/Pictures/TestLibrary.aplibrary
+```
+
+### 3. Inspect the exported files
+
+You should see a structure like:
+
+```text
+~/Migrated/TestLibrary-export/
+  export-checkpoint.log
+  2006/
+    11/
+      02/
+        20061102-161812/
+          PICT0019.JPG
+          PICT0019.xmp
+          PICT0019__PICT0019.JPG
+          PICT0019__PICT0019.xmp
+```
+
+Optionally inspect a sidecar with `exiftool`:
+
+```shell
+exiftool -a -G1 -s \
+  ~/Migrated/TestLibrary-export/2006/11/02/20061102-161812/PICT0019__PICT0019.xmp
+```
+
+### 4. Import into DigiKam
+
+In DigiKam:
+
+1. Add `~/Migrated/TestLibrary-export` as a collection root.
+2. Let DigiKam scan the files.
+3. If needed, run a metadata read from files so DigiKam refreshes from the XMP
+   sidecars.
+
+Expected results:
+
+- original and version images appear as normal files outside Aperture
+- titles and dates come from XMP sidecars
+- ratings and pick/color labels are available where present
+- tags import from `dc:subject` and/or `digiKam:TagsList`
+
+## NAS and Large-Library Operation
+
+For heavy exports against network storage, you can combine built-in throttling
+with `ionice` and `nice`:
+
+```shell
 ionice -c3 \
 nice -n 19 \
 cargo run --release --bin export -- \
---nas-safe \
---max-read-mib-per-sec 26 \
---max-write-mib-per-sec 26 \
---io-delay-ms 10 \
---io-chunk-kib 128 \
---out-dir "/mnt/photos/tmp/EXPORT" \
-"/mnt/photos/IMPORT/Aperture Library.aplibrary"
+  --nas-safe \
+  --max-read-mib-per-sec 26 \
+  --max-write-mib-per-sec 26 \
+  --io-delay-ms 10 \
+  --io-chunk-kib 128 \
+  --out-dir /mnt/photos/tmp/aplib-export \
+  "/mnt/photos/IMPORT/Aperture Library.aplibrary"
 ```
 
-## Extras
+The exporter logs per-job and aggregate throughput so you can tune these values
+for your storage.
 
-Optional helper utilities are in [extras](extras).
-
-For NAS troubleshooting details and usage, see [extras/README.md](extras/README.md).
+Optional troubleshooting utilities live in [extras](extras). NAS-specific notes
+are in [extras/README.md](extras/README.md).
 
 ## Testing
 
-The most important regression coverage in this fork is now the exporter-focused test slice:
+The most important regression coverage in this fork is the exporter-focused test
+slice:
 
 ```shell
 cargo test --bin export exporter::tests:: -- --nocapture
 ```
 
-This includes a migration-oriented golden test that exports the synthetic fixture library in [testdata](testdata) and verifies:
+That test slice uses the synthetic fixture in [testdata](testdata) and checks:
 
-- the emitted master and version filenames
-- sidecar creation for both master and exported version outputs
-- DigiKam-critical XMP fields such as title, dates, rating, and pick/color labels
-- master/version linkage fields in the custom `aplib:` namespace
+- end-to-end export of a master plus version
+- emitted filenames
+- creation of matching sidecars
+- DigiKam-relevant XMP fields
+- preserved `aplib:` provenance fields
 
-The baseline golden test currently lives in [src/bin/dumper/exporter.rs](/home/jtuttle/src/aplib-extractor/src/bin/dumper/exporter.rs) as `test_export_fixture_library_writes_expected_files_and_digikam_xmp_fields`.
+If you change export naming, XMP mapping, or fixture metadata, update the test
+expectations and [testdata/README.md](testdata/README.md) together.
 
-If you change export filenames, XMP mapping, or fixture metadata, update that test and the corresponding fixture notes in [testdata/README.md](/home/jtuttle/src/aplib-extractor/testdata/README.md).
+## Project Notes
 
-## Major Changes
-
-Significant changes from upstream include:
-
-- Implemented a new `export` command that copies master/version images and their accompanying metadata from the Aperture Library, to facilitate migration to other management systems (e.g. [DigiKam][]).
-- Use locally cached hashmaps to improve performance on repeated runs of the program, especially if the Aperture library is on a network filesystem where accesses are expensive.
-  - The first run may still be slow (40 minutes for a 60k image library, using SMB over 1Gb Ethernet), but subsequent runs will use the local cache if available.
-  - **Note that this feature assumes the Aperture Library is no longer being actively modified.** If you are still actively using your Aperture Library (implying you have access to Aperture and a Mac to run it on), there are probably many easier ways of exporting your data from it...
-- Added a `--dryrun` option, which can be used to "pre-warm" the cache hashmaps.
-
-[DigiKam]: https://www.digikam.org/
-
+- The Aperture file format notes in [docs/format.md](docs/format.md) describe
+  the bundle layout this parser understands.
+- The core export implementation lives in [src/bin/dumper/exporter.rs](src/bin/dumper/exporter.rs).
+- The binary target is still sourced from `src/bin/dumper/main.rs`; the binary
+  name is `export`.
 
 ## License
 
-  This Source Code Form is subject to the terms of the Mozilla Public
-  License, v. 2.0. If a copy of the MPL was not distributed with this
-  file, You can obtain one at http://mozilla.org/MPL/2.0/.
+This Source Code Form is subject to the terms of the Mozilla Public License,
+v. 2.0. If a copy of the MPL was not distributed with this file, You can obtain
+one at http://mozilla.org/MPL/2.0/.
 
-See the LICENSE file in this repository.
+See [LICENSE](LICENSE).

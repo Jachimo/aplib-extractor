@@ -241,9 +241,7 @@ impl ToXmp for Master {
             let clean = crate::xmp::sanitize_for_xmp(name);
             ok &= xmp.set_property(xmp_ns, "Title", &clean, PropFlags::NONE).is_ok();
             // Mirror title into broadly recognized XMP fields for importers like digiKam.
-            ok &= xmp
-                .set_property(crate::xmp::ns::NS_DC, "title", &clean, PropFlags::NONE)
-                .is_ok();
+            ok &= crate::xmp::write_lang_alt_text(xmp, crate::xmp::ns::NS_DC, "title", &clean);
             ok &= xmp
                 .set_property(crate::xmp::ns::NS_PHOTOSHOP, "Headline", &clean, PropFlags::NONE)
                 .is_ok();
