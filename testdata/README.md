@@ -2,6 +2,21 @@
 
 This directory contains a synthetic Aperture Library bundle used for testing the export tool.
 
+The most important regression coverage in this fork is the exporter-focused test
+slice:
+
+```shell
+cargo test --bin export exporter::tests:: -- --nocapture
+```
+
+That test slice uses the synthetic fixture in [testdata](testdata) and checks:
+
+- end-to-end export of a master plus version
+- emitted filenames
+- creation of matching sidecars
+- DigiKam-relevant XMP fields
+- preserved `aplib:` provenance fields
+
 ## Structure
 
 `TestLibrary.aplibrary/` is a complete Aperture Library bundle with the following structure:
