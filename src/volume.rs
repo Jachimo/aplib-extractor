@@ -1,5 +1,6 @@
 /*
- * Copyright (C) 2023-2024 Hubert Figuière
+ * Copyright (C) 2016-2023 Hubert Figuière
+ * Copyright (C) 2025-2026 the "aplib-extractor" Contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this

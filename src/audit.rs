@@ -1,15 +1,15 @@
 /*
  * Copyright (C) 2016-2023 Hubert Figuière
+ * Copyright (C) 2025-2026 the "aplib-extractor" Contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
-
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use crate::plutils::{
     get_array_value, get_bool_value, get_data_value, get_date_value, get_dict_value, get_int_value,

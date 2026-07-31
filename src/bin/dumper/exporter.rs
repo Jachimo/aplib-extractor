@@ -1,5 +1,6 @@
 /*
- * Copyright (C) 2025 by Github User @Jachimo
+ * Copyright (C) 2016-2023 Hubert Figuière
+ * Copyright (C) 2025-2026 the "aplib-extractor" Contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -7,11 +8,11 @@
  */
 
 use serde::Serialize;
+use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::fs;
 use std::fs::OpenOptions;
-use std::cmp::Ordering;
 use std::io::{BufReader, BufWriter, Read, Write};
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
