@@ -375,26 +375,22 @@ impl ToXmp for Master {
             }
         }
 
-        // Write keywords into Dublin Core (flat, for compatibility)
-        if let Some(ref keywords) = self.keywords {
-            crate::xmp::write_rdf_bag(xmp, crate::xmp::ns::NS_DC, "subject", keywords);
-        }
- 
-        // Write hierarchical keywords into digiKam TagsList (ordered, with full paths)
-        if let Some(ref custom) = self.custom_aplib_fields {
-            if let Some(hierarchical_json) = custom.get("_resolved_hierarchical_keywords") {
-                if let Ok(hierarchical_keywords) =
-                    serde_json::from_str::<Vec<String>>(hierarchical_json)
-                {
-                    crate::xmp::write_rdf_seq(
-                        xmp,
-                        crate::xmp::ns::NS_DIGIKAM,
-                        "TagsList",
-                        &hierarchical_keywords,
-                    );
-                }
-            }
-        }
+        // Write flat and hierarchical keyword views for digiKam and interop namespaces.
+        let flat_keywords = self.keywords.clone().unwrap_or_default();
+        let hierarchical_keywords = self
+            .custom_aplib_fields
+            .as_ref()
+            .and_then(|custom| custom.get("_resolved_hierarchical_keywords"))
+            .and_then(|json| serde_json::from_str::<Vec<String>>(json).ok())
+            .unwrap_or_default();
+
+        let path_keywords = if hierarchical_keywords.is_empty() {
+            flat_keywords.clone()
+        } else {
+            hierarchical_keywords
+        };
+
+        crate::xmp::write_interop_keywords(xmp, &flat_keywords, &path_keywords);
 
         ok
     }

@@ -503,7 +503,7 @@ fn export_job_files(
                 ctx.flat_keyword_map,
                 &format!("Master {}", job.master_uuid),
             );
-            let hierarchical_resolved = aplib::keyword::resolve_keyword_uuids(
+            let hierarchical_resolved = aplib::keyword::resolve_keyword_uuids_for_digikam(
                 raw_keywords,
                 ctx.hierarchical_keyword_map,
                 &format!("Master {}", job.master_uuid),
@@ -674,7 +674,7 @@ fn export_job_files(
                     ctx.flat_keyword_map,
                     &format!("Version {}", version_uuid),
                 );
-                let hierarchical_resolved = aplib::keyword::resolve_keyword_uuids(
+                let hierarchical_resolved = aplib::keyword::resolve_keyword_uuids_for_digikam(
                     raw_keywords,
                     ctx.hierarchical_keyword_map,
                     &format!("Version {}", version_uuid),

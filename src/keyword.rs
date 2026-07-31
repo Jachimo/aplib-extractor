@@ -165,8 +165,10 @@ pub fn build_keyword_maps(
 
 /// Parse a keyword string that may contain hierarchical keywords separated by multiple spaces.
 ///
-/// **Parsing Rule**: Multiple consecutive whitespace characters (2+) are treated as delimiters.
-/// Single spaces are part of the keyword name.
+/// **Parsing Rule**:
+/// - One or more tab characters are treated as delimiters.
+/// - Multiple consecutive spaces (2+) are treated as delimiters.
+/// - Single spaces are part of the keyword name.
 ///
 /// **Hierarchy Convention**: When split on multiple spaces, the rightmost keyword is the parent,
 /// and keywords to the left are children (progressively more specific).
@@ -184,12 +186,59 @@ pub fn build_keyword_maps(
 /// single-element vector with the original string (trimmed and sanitized).
 fn parse_hierarchical_keyword(keyword_str: &str) -> Vec<String> {
     use crate::xmp::sanitize_for_xmp;
-    
-    // Check if the string contains multiple consecutive spaces (delimiter pattern)
-    let has_multi_space = keyword_str.contains("  "); // Two or more spaces
-    
-    if !has_multi_space {
-        // No multi-space delimiter - this is a single keyword
+
+    fn split_keyword_components(input: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut current = String::new();
+        let mut space_count = 0usize;
+
+        let flush_current = |buf: &mut String, out: &mut Vec<String>| {
+            if !buf.trim().is_empty() {
+                out.push(buf.trim().to_string());
+            }
+            buf.clear();
+        };
+
+        for ch in input.chars() {
+            match ch {
+                '\t' => {
+                    if space_count == 1 {
+                        current.push(' ');
+                    }
+                    if space_count >= 2 {
+                        flush_current(&mut current, &mut out);
+                    }
+                    space_count = 0;
+                    flush_current(&mut current, &mut out);
+                }
+                ' ' => {
+                    space_count += 1;
+                }
+                _ => {
+                    if space_count == 1 {
+                        current.push(' ');
+                    } else if space_count >= 2 {
+                        flush_current(&mut current, &mut out);
+                    }
+                    space_count = 0;
+                    current.push(ch);
+                }
+            }
+        }
+
+        if space_count == 1 {
+            current.push(' ');
+        } else if space_count >= 2 {
+            flush_current(&mut current, &mut out);
+        }
+
+        flush_current(&mut current, &mut out);
+        out
+    }
+
+    let components = split_keyword_components(keyword_str);
+
+    if components.is_empty() {
         let trimmed = keyword_str.trim();
         if trimmed.is_empty() {
             return vec![];
@@ -200,43 +249,38 @@ fn parse_hierarchical_keyword(keyword_str: &str) -> Vec<String> {
         }
         return vec![sanitized];
     }
-    
-    // Split on multiple consecutive spaces (2 or more)
-    // Use a regex-like approach: split on runs of 2+ spaces
-    let mut keywords = Vec::new();
-    let mut current_keyword = String::new();
-    let mut space_count = 0;
-    
-    for ch in keyword_str.chars() {
-        if ch == ' ' {
-            space_count += 1;
-        } else {
-            // Non-space character
-            if space_count >= 2 {
-                // We had a delimiter - save the current keyword and start a new one
-                if !current_keyword.is_empty() {
-                    keywords.push(sanitize_for_xmp(current_keyword.trim()));
-                    current_keyword = String::new();
-                }
-            } else if space_count == 1 {
-                // Single space - add it to the current keyword
-                current_keyword.push(' ');
-            }
-            // Reset space counter and add the character
-            space_count = 0;
-            current_keyword.push(ch);
-        }
-    }
-    
-    // Don't forget the last keyword
-    if !current_keyword.is_empty() {
-        keywords.push(sanitize_for_xmp(current_keyword.trim()));
-    }
-    
-    // Filter out any empty strings that may have resulted from sanitization
+
+    let mut keywords: Vec<String> = components
+        .into_iter()
+        .map(|component| sanitize_for_xmp(&component))
+        .collect();
     keywords.retain(|k| !k.is_empty());
-    
+
     keywords
+}
+
+fn digikam_path_from_components(components: &[String]) -> Option<String> {
+    if components.is_empty() {
+        return None;
+    }
+
+    // Aperture convention in this codebase: rightmost component is parent.
+    // digiKam path convention: parent/child/leaf.
+    let mut parent_to_child = components.to_vec();
+    parent_to_child.reverse();
+
+    let path = parent_to_child
+        .iter()
+        .map(|segment| segment.trim().to_string())
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("/");
+
+    if path.is_empty() {
+        None
+    } else {
+        Some(path)
+    }
 }
 
 /// Resolve a list of keyword UUIDs to names using the provided map.
@@ -272,6 +316,40 @@ pub fn resolve_keyword_uuids(
     result
 }
 
+/// Resolve keyword UUIDs into digiKam-compatible hierarchical paths.
+///
+/// Output entries are suitable for `digiKam:TagsList` and use `/` as a path separator.
+/// DigiKam splits on `/` directly, so literal `/` inside a component cannot be represented
+/// unambiguously in this field.
+pub fn resolve_keyword_uuids_for_digikam(
+    uuids: &[String],
+    keyword_map: &std::collections::HashMap<String, String>,
+    _context: &str,
+) -> Vec<String> {
+    let mut result = Vec::new();
+
+    for uuid in uuids {
+        if let Some(name) = keyword_map.get(uuid) {
+            // Values from the hierarchical keyword map are already parent/child paths.
+            // Keep separator semantics and only re-sanitize/trim entries.
+            let sanitized = crate::xmp::sanitize_for_xmp(name).trim().to_string();
+            if !sanitized.is_empty() {
+                result.push(sanitized);
+            }
+            continue;
+        }
+
+        // Direct names (common in iPhoto imports) may encode hierarchy using tabs
+        // or runs of multiple spaces.
+        let components = parse_hierarchical_keyword(uuid);
+        if let Some(path) = digikam_path_from_components(&components) {
+            result.push(path);
+        }
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,6 +380,15 @@ mod tests {
         // Many spaces
         let result = parse_hierarchical_keyword("A     B");
         assert_eq!(result, vec!["A", "B"]);
+    }
+
+    #[test]
+    fn test_parse_hierarchical_keyword_tabs() {
+        let result = parse_hierarchical_keyword("Vacation\tiPhoto");
+        assert_eq!(result, vec!["Vacation", "iPhoto"]);
+
+        let result = parse_hierarchical_keyword("Child\tParent\tGrandparent");
+        assert_eq!(result, vec!["Child", "Parent", "Grandparent"]);
     }
 
     #[test]
@@ -378,6 +465,24 @@ mod tests {
         // "iPhoto Original" -> one keyword
         // "Wedding  Stock Category" -> two keywords
         assert_eq!(result, vec!["iPhoto Original", "Wedding", "Stock Category"]);
+    }
+
+    #[test]
+    fn test_resolve_keyword_uuids_for_digikam_with_tab_hierarchy() {
+        let keyword_map = std::collections::HashMap::new();
+        let input = vec!["Vacation\tiPhoto".to_string(), "iPhoto Original".to_string()];
+        let result = resolve_keyword_uuids_for_digikam(&input, &keyword_map, "test");
+
+        assert_eq!(result, vec!["iPhoto/Vacation", "iPhoto Original"]);
+    }
+
+    #[test]
+    fn test_resolve_keyword_uuids_for_digikam_preserves_existing_chars() {
+        let keyword_map = std::collections::HashMap::new();
+        let input = vec!["Child/Leaf\tParent\\Node".to_string()];
+        let result = resolve_keyword_uuids_for_digikam(&input, &keyword_map, "test");
+
+        assert_eq!(result, vec!["Parent\\Node/Child/Leaf"]);
     }
 
     #[test]

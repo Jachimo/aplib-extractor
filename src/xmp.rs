@@ -20,6 +20,9 @@ pub mod ns {
     pub const NS_TIFF: &str = "http://ns.adobe.com/tiff/1.0/";
     pub const APLIB: &str = "http://github.com/Jachimo/aplib-extractor/aplib/1.0/";
     pub const NS_DIGIKAM: &str = "http://www.digikam.org/ns/1.0/";
+    pub const NS_MICROSOFT_PHOTO: &str = "http://ns.microsoft.com/photo/1.0/";
+    pub const NS_LR: &str = "http://ns.adobe.com/lightroom/1.0/";
+    pub const NS_MEDIAPRO: &str = "http://ns.iview-multimedia.com/mediapro/1.0/";
 }
 
 /// Register non-standard namespaces we write during export.
@@ -32,6 +35,24 @@ pub fn register_export_namespaces() {
         eprintln!(
             "Warning: Failed to register XMP namespace '{}': {:?}",
             ns::NS_DIGIKAM, e
+        );
+    }
+    if let Err(e) = exempi2::register_namespace(ns::NS_MICROSOFT_PHOTO, "MicrosoftPhoto") {
+        eprintln!(
+            "Warning: Failed to register XMP namespace '{}': {:?}",
+            ns::NS_MICROSOFT_PHOTO, e
+        );
+    }
+    if let Err(e) = exempi2::register_namespace(ns::NS_LR, "lr") {
+        eprintln!(
+            "Warning: Failed to register XMP namespace '{}': {:?}",
+            ns::NS_LR, e
+        );
+    }
+    if let Err(e) = exempi2::register_namespace(ns::NS_MEDIAPRO, "mediapro") {
+        eprintln!(
+            "Warning: Failed to register XMP namespace '{}': {:?}",
+            ns::NS_MEDIAPRO, e
         );
     }
 }
@@ -193,6 +214,40 @@ pub fn write_rdf_seq(xmp: &mut Xmp, namespace: &str, property: &str, values: &[S
             );
         }
     }
+}
+
+/// Write keywords across the main interop namespaces used by digiKam and peers.
+///
+/// - `flat_keywords` are leaf/tag names for `dc:subject`.
+/// - `path_keywords` are hierarchical paths using `/` separators.
+pub fn write_interop_keywords(xmp: &mut Xmp, flat_keywords: &[String], path_keywords: &[String]) {
+    if !flat_keywords.is_empty() {
+        write_rdf_bag(xmp, ns::NS_DC, "subject", flat_keywords);
+    }
+
+    if path_keywords.is_empty() {
+        return;
+    }
+
+    // digiKam canonical hierarchical store.
+    write_rdf_seq(xmp, ns::NS_DIGIKAM, "TagsList", path_keywords);
+
+    // Common companion namespaces seen in digiKam-written XMP.
+    write_rdf_bag(
+        xmp,
+        ns::NS_MICROSOFT_PHOTO,
+        "LastKeywordXMP",
+        path_keywords,
+    );
+
+    // Lightroom/MediaPro paths use '|' as segment separators.
+    let pipe_paths: Vec<String> = path_keywords
+        .iter()
+        .map(|p| p.replace('/', "|"))
+        .collect();
+
+    write_rdf_bag(xmp, ns::NS_LR, "hierarchicalSubject", &pipe_paths);
+    write_rdf_bag(xmp, ns::NS_MEDIAPRO, "CatalogSets", &pipe_paths);
 }
 
 #[cfg(test)]
