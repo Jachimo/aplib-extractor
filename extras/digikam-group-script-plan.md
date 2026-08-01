@@ -52,7 +52,7 @@ CREATE TABLE Albums (
     id INTEGER PRIMARY KEY,
     albumRoot INTEGER NOT NULL,        -- FK to AlbumRoots.id
     parentId INTEGER,
-    relativePath TEXT NOT NULL,         -- relative to album root
+    relativePath TEXT NOT NULL,         -- relative to album root, stored WITH leading slash (e.g., '/2024/vacation')
     date DATE,
     caption TEXT,
     collection TEXT,
@@ -74,7 +74,7 @@ CREATE TABLE Images (
 );
 ```
 
-**IMPORTANT**: These schema definitions are from training data knowledge and should be verified against the actual source. See Step 1.1 for verification instructions.
+**IMPORTANT**: These schema definitions are from training data knowledge and should be verified against the actual source. See Step 1.1 for verification instructions. **If the `groupImage` column does not exist or has different semantics, STOP and report the actual schema before proceeding. Do not attempt to adapt the SQL queries without understanding the actual grouping mechanism.**
 
 ---
 
@@ -109,7 +109,9 @@ CREATE TABLE Images (
    - Default value (is it `-1` or `NULL` or `0`?)
    - Semantics (does leader point to itself, or use a separate flag?)
 
-5. Document any differences from the schema provided above.
+5. **Verify `Albums.relativePath` format**: Check whether it stores paths WITH a leading slash (e.g., `/2024/vacation`) or WITHOUT (e.g., `2024/vacation`). This affects path resolution logic in Step 1.3 and Step 2.1.
+
+6. Document any differences from the schema provided above.
 
 **Deliverable**: Verified SQL CREATE TABLE statements for `Images`, `Albums`, `AlbumRoots`. If the schema differs from what's provided above, update all subsequent steps accordingly.
 
@@ -156,11 +158,14 @@ CREATE TABLE Images (
    -- Filename: IMG_001.jpg
 
    -- Step 1: Find matching AlbumRoot (by specificPath prefix)
+   -- Use '/%' to avoid matching /photos when path is /photos2/...
    SELECT id, specificPath, label FROM AlbumRoots
-   WHERE '/photos/2024/vacation' LIKE CONCAT(specificPath, '%');
+   WHERE '/photos/2024/vacation' LIKE CONCAT(specificPath, '/%')
+      OR '/photos/2024/vacation' = specificPath;
 
-   -- Step 2: Find matching Album (relativePath is relative to root)
+   -- Step 2: Find matching Album (relativePath is relative to root, stored WITH leading slash)
    -- If root specificPath is '/photos', then relativePath should be '/2024/vacation'
+   -- CONCAT(specificPath, relativePath) = '/photos/2024/vacation'
    SELECT a.id, a.relativePath, a.albumRoot, r.specificPath
    FROM Albums a
    JOIN AlbumRoots r ON a.albumRoot = r.id
@@ -173,7 +178,7 @@ CREATE TABLE Images (
      AND i.name = 'IMG_001.jpg';
    ```
 
-3. Document the full path resolution logic and confirm it works.
+3. Document the full path resolution logic and confirm it works. **If `relativePath` does NOT have a leading slash**, adjust the CONCAT in Step 2 to `CONCAT(r.specificPath, '/', a.relativePath)` and update `resolve_image_id()` in Step 2.1 accordingly.
 
 **Deliverable**: Working SQL query that resolves a filesystem path to an image ID.
 
@@ -190,12 +195,22 @@ CREATE TABLE Images (
 - All write operations wrapped in transactions
 - Read-only validation before any writes
 - **Single connection** (not connection pooling — unnecessary for batch operations and adds complexity)
-- All image path-to-ID resolution done via the `AlbumRoots` → `Albums` → `Images` join
+- All image path-to-ID resolution done via a single 3-table JOIN query (`AlbumRoots` → `Albums` → `Images`)
 
 **Required Functions**:
 ```python
+def test_connection(db_config):
+    """Test database connectivity. Returns True if successful, raises exception otherwise."""
+    conn = mysql.connector.connect(**db_config)
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1")
+    cursor.close()
+    conn.close()
+    return True
+
 def create_database_backup(db_config, backup_path):
-    """Use mysqldump subprocess to create a full backup."""
+    """Use mysqldump subprocess to create a full backup. Uses --defaults-extra-file
+    to avoid exposing password in process list."""
     ...
 
 def resolve_image_id(cursor, full_image_path):
@@ -203,26 +218,55 @@ def resolve_image_id(cursor, full_image_path):
     Given a full filesystem path like /photos/2024/vacation/IMG_001.jpg,
     return the Images.id from the DigiKam database.
 
+    Uses a single JOIN query for efficiency. If multiple AlbumRoots match,
+    logs a warning and returns None (ambiguous match).
+
     Logic:
     1. Split path into directory and filename
-    2. Find AlbumRoot where specificPath is a prefix of the directory
-    3. Compute relativePath = directory - specificPath
-    4. Find Album matching (albumRoot, relativePath)
-    5. Find Image matching (album.id, filename)
-    Returns: image_id (int) or None if not found
+    2. JOIN AlbumRoots, Albums, Images to find matching image
+    Returns: image_id (int) or None if not found or ambiguous
     """
-    ...
+    import os
+    directory, filename = os.path.split(full_image_path)
+    query = """
+        SELECT i.id
+        FROM Images i
+        JOIN Albums a ON i.album = a.id
+        JOIN AlbumRoots r ON a.albumRoot = r.id
+        WHERE i.name = %s
+          AND CONCAT(r.specificPath, a.relativePath) = %s
+    """
+    cursor.execute(query, (filename, directory))
+    rows = cursor.fetchall()
+    if len(rows) > 1:
+        logger.warning(f"Path '{full_image_path}' matched multiple album roots: {rows}")
+        return None
+    return rows[0][0] if rows else None
 
 def get_image_group_status(cursor, image_id):
-    """Returns the current groupImage value for an image."""
-    ...
+    """Returns the current groupImage value for an image, or None if image not found."""
+    cursor.execute("SELECT groupImage FROM Images WHERE id = %s", (image_id,))
+    row = cursor.fetchone()
+    return row[0] if row else None
 
 def get_existing_groups(cursor):
     """
-    Returns dict mapping leader_id -> list of member_ids
+    Returns dict mapping leader_id -> list of member_ids (excluding leader)
     for all existing groups in the database.
     """
-    ...
+    cursor.execute("""
+        SELECT groupImage as leader_id, GROUP_CONCAT(id) as all_ids
+        FROM Images
+        WHERE groupImage != -1
+        GROUP BY groupImage
+    """)
+    result = {}
+    for row in cursor.fetchall():
+        leader_id = row[0]
+        all_ids = [int(x) for x in row[1].split(',')]
+        # Exclude the leader from the member list
+        result[leader_id] = [img_id for img_id in all_ids if img_id != leader_id]
+    return result
 
 def create_group(cursor, leader_image_id, member_image_ids):
     """
@@ -230,12 +274,33 @@ def create_group(cursor, leader_image_id, member_image_ids):
     1. Setting leader's groupImage = leader_image_id (self-reference)
     2. Setting each member's groupImage = leader_image_id
     Must be called within a transaction.
+
+    Raises ValueError if member_image_ids is empty or if any image is already in a group.
     """
-    ...
+    if not member_image_ids:
+        raise ValueError("Cannot create a group with no members")
+
+    # Set leader's groupImage to its own id (self-reference)
+    cursor.execute(
+        "UPDATE Images SET groupImage = %s WHERE id = %s AND groupImage = -1",
+        (leader_image_id, leader_image_id)
+    )
+    if cursor.rowcount == 0:
+        raise ValueError(f"Leader image {leader_image_id} already in a group or not found")
+
+    # Set each member's groupImage to leader's id
+    for member_id in member_image_ids:
+        cursor.execute(
+            "UPDATE Images SET groupImage = %s WHERE id = %s AND groupImage = -1",
+            (leader_image_id, member_id)
+        )
+        if cursor.rowcount == 0:
+            raise ValueError(f"Member image {member_id} already in a group or not found")
 
 def get_images_in_group(cursor, leader_id):
-    """Returns list of image IDs in the group led by leader_id."""
-    ...
+    """Returns list of image IDs in the group led by leader_id (including leader)."""
+    cursor.execute("SELECT id FROM Images WHERE groupImage = %s", (leader_id,))
+    return [row[0] for row in cursor.fetchall()]
 ```
 
 ### Step 2.2: Design XMP Parsing Layer
@@ -279,7 +344,9 @@ def extract_master_uuid(xmp_file_path):
         tree = ET.parse(xmp_file_path)
         root = tree.getroot()
 
-        # Register namespaces for proper parsing
+        # Note: ET.register_namespace() affects serialization output, not parsing.
+        # Parsing works regardless of whether namespaces are registered.
+        # We register them here so that if we ever serialize the XMP, the prefixes are preserved.
         for prefix, uri in NAMESPACES.items():
             ET.register_namespace(prefix, uri)
 
@@ -304,17 +371,28 @@ def extract_master_uuid(xmp_file_path):
 
 **Objective**: Map MasterUUID values to DigiKam groups.
 
+**Supported Image Extensions**:
+```python
+IMAGE_EXTENSIONS = {
+    '.jpg', '.jpeg', '.png', '.tif', '.tiff', '.bmp', '.gif',
+    '.cr2', '.crw', '.nef', '.arw', '.dng', '.raf', '.orf',
+    '.rw2', '.pef', '.srw', '.raw', '.heic', '.heif', '.avif',
+    '.jxl', '.webp'
+}
+```
+
 **Algorithm**:
-1. Scan directory for image files (`.jpg`, `.png`, `.tif`, `.raw`, etc.)
+1. Scan directory for image files (using `IMAGE_EXTENSIONS` set above)
 2. For each image, locate corresponding `.xmp` sidecar
 3. Parse XMP and extract `aplib:MasterUUID`
 4. Build dictionary: `{master_uuid: [image_path1, image_path2, ...]}`
 5. For each UUID with 2+ images:
    - Resolve each image path to a DigiKam `Images.id` via `resolve_image_id()`
    - Skip any images not found in the database (log warning)
-   - Check if images are already in a group (check `groupImage` column)
+   - Check if images are already in a group (check `groupImage` column via `get_image_group_status()`)
    - If any image is already in a group, log warning and skip (do not modify existing groups)
-   - Choose a leader (first image in the list, or the oldest by modification date)
+   - Choose a leader (see Leader Selection Strategy below)
+   - Build `member_image_ids` list EXCLUDING the leader
    - Call `create_group(leader_id, member_ids)` within a transaction
 
 **Leader Selection Strategy**:
@@ -322,6 +400,7 @@ def extract_master_uuid(xmp_file_path):
 - Or prefer the image with the earliest modification date
 - Or simply use the first image alphabetically
 - Document the chosen strategy in the code
+- **The leader is NOT included in `member_image_ids`** — `create_group()` handles the leader separately
 
 ---
 
@@ -358,14 +437,16 @@ pip install -r requirements.txt
 **File: `src/database.py`**
 - Database connection management (single connection, not pooled)
 - Transaction handling (explicit `start_transaction()`, `commit()`, `rollback()`)
-- **Path resolution**: `resolve_image_id()` using the 3-table join (`AlbumRoots` → `Albums` → `Images`)
-- **Group operations**: `create_group()`, `get_image_group_status()`, `get_existing_groups()`
-- **Backup**: Use `subprocess.run()` to call `mysqldump` (not `SELECT INTO OUTFILE` — different permissions and output location)
+- **`test_connection()`**: Test database connectivity, return True or raise exception
+- **Path resolution**: `resolve_image_id()` using the single 3-table JOIN query from Step 2.1
+- **Group operations**: `create_group()`, `get_image_group_status()`, `get_existing_groups()`, `get_images_in_group()`
+- **Backup**: Use `subprocess.run()` to call `mysqldump` with `--defaults-extra-file` (not `--password` on command line, not `SELECT INTO OUTFILE`)
 
 **File: `src/grouper.py`**
 - Main grouping logic orchestrating XMP parsing and database operations
 - Batch processing with progress reporting (print progress every N images)
 - Leader selection strategy (document and implement consistently)
+- **Exclude leader from member list** before calling `create_group()`
 
 **File: `src/config.py`**
 - Configuration from environment variables
@@ -382,24 +463,32 @@ pip install -r requirements.txt
 
 **Required Safety Mechanisms**:
 
-1. **Database Backup** (use `mysqldump` via subprocess, not `SELECT INTO OUTFILE`):
+1. **Database Backup** (use `mysqldump` via subprocess with `--defaults-extra-file` to avoid exposing password in process list):
    ```python
    import subprocess
+   import tempfile
+   import os
    from datetime import datetime
 
    def backup_database(db_config, backup_dir):
        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
        backup_file = f"{backup_dir}/digikam_backup_{timestamp}.sql"
-       cmd = [
-           "mysqldump",
-           "-h", db_config['host'],
-           "-P", str(db_config['port']),
-           "-u", db_config['user'],
-           f"--password={db_config['password']}",
-           db_config['database']
-       ]
-       with open(backup_file, 'w') as f:
-           subprocess.run(cmd, stdout=f, check=True)
+
+       # Write credentials to temp file securely (avoids password in process list)
+       with tempfile.NamedTemporaryFile(mode='w', suffix='.cnf', delete=False) as f:
+           f.write(f"[client]\nhost={db_config['host']}\n")
+           f.write(f"port={db_config['port']}\n")
+           f.write(f"user={db_config['user']}\n")
+           f.write(f"password={db_config['password']}\n")
+           creds_file = f.name
+
+       try:
+           cmd = ["mysqldump", f"--defaults-extra-file={creds_file}", db_config['database']]
+           with open(backup_file, 'w') as out:
+               subprocess.run(cmd, stdout=out, check=True)
+       finally:
+           os.unlink(creds_file)  # Always clean up credentials file
+
        return backup_file
    ```
 
@@ -412,13 +501,19 @@ pip install -r requirements.txt
    - Verify image exists in DigiKam database before grouping (via `resolve_image_id()`)
    - Check `groupImage` column — if already set to something other than `-1`, skip with warning
    - Validate XMP structure before processing (catch `ParseError`)
+   - Validate that `member_image_ids` is non-empty before calling `create_group()`
 
 4. **Transaction Safety**:
    ```python
    def create_group_safe(conn, leader_image_id, member_image_ids):
+       cursor = None
        try:
+           if not member_image_ids:
+               raise ValueError("Cannot create a group with no members")
+
            conn.start_transaction()
            cursor = conn.cursor()
+
            # Set leader's groupImage to its own id (self-reference)
            cursor.execute(
                "UPDATE Images SET groupImage = %s WHERE id = %s AND groupImage = -1",
@@ -426,6 +521,7 @@ pip install -r requirements.txt
            )
            if cursor.rowcount == 0:
                raise ValueError(f"Leader image {leader_image_id} already in a group or not found")
+
            # Set each member's groupImage to leader's id
            for member_id in member_image_ids:
                cursor.execute(
@@ -434,12 +530,14 @@ pip install -r requirements.txt
                )
                if cursor.rowcount == 0:
                    raise ValueError(f"Member image {member_id} already in a group or not found")
+
            conn.commit()
        except Exception as e:
            conn.rollback()
            raise
        finally:
-           cursor.close()
+           if cursor is not None:
+               cursor.close()
    ```
 
 5. **Audit Logging**:
@@ -462,27 +560,32 @@ pip install -r requirements.txt
 
 **File: `tests/test_database.py`**
 - Mock database connections using `unittest.mock`
-- Test `resolve_image_id()` with valid path, invalid path, edge cases
+- Test `test_connection()` returns True on successful connection
+- Test `resolve_image_id()` with valid path, invalid path, ambiguous match (multiple roots), edge cases
 - Test `create_group_safe()` transaction commit on success
 - Test `create_group_safe()` rollback on error (e.g., member already in group)
-- Test `get_existing_groups()` returns correct structure
-- Test backup function calls `mysqldump` with correct arguments (mock subprocess)
+- Test `create_group_safe()` raises ValueError when `member_image_ids` is empty
+- Test `create_group_safe()` handles `cursor = None` in finally when `start_transaction()` fails
+- Test `get_existing_groups()` returns correct structure (leader excluded from member list)
+- Test `get_image_group_status()` returns correct value
+- Test backup function calls `mysqldump` with `--defaults-extra-file` (mock subprocess, verify temp file creation and cleanup)
 
 **File: `tests/test_grouper.py`**
 - Test grouping algorithm with sample data (mock XMP parser and database)
 - Test that images already in groups are skipped
 - Test that images not in database are skipped with warning
 - Test leader selection logic
+- Test that leader is excluded from `member_image_ids`
 - Test dry-run mode produces no database writes
 
 ### Step 4.2: Integration Tests
 
 **Test Environment Setup**:
 1. Create local MySQL test database
-2. Import DigiKam schema for `AlbumRoots`, `Albums`, and `Images` tables (you need all three for path resolution — not just "ImageGroups tables")
+2. Import DigiKam schema for `AlbumRoots`, `Albums`, and `Images` tables — use the CREATE TABLE statements from the "Known Schema" section above (you need all three for path resolution)
 3. Insert test data:
    - 1 AlbumRoot with `specificPath = '/test/photos'`
-   - 2 Albums under that root with different `relativePath` values
+   - 2 Albums under that root with different `relativePath` values (e.g., `/album1` and `/album2`)
    - 10 Images across those albums, all with `groupImage = -1`
 4. Create test image files with XMP sidecars in a temporary directory matching the album structure
 
@@ -500,6 +603,7 @@ pip install -r requirements.txt
 
 **Pre-Deployment Checklist**:
 - [ ] Schema verified against actual DigiKam source code
+- [ ] `Albums.relativePath` leading slash format confirmed
 - [ ] Dry-run on production data shows expected groups
 - [ ] Database backup created successfully
 - [ ] All existing groups remain intact
@@ -512,22 +616,21 @@ pip install -r requirements.txt
 
 ### Step 5.1: Create Configuration Template
 
-**File: `.env.example`**:
+**File: `.env.example`** (note: `export` is required so variables are available to child Python process):
 ```bash
 # Database Configuration
-DIGIKAM_DB_HOST=mysql.example.com
-DIGIKAM_DB_PORT=3306
-DIGIKAM_DB_NAME=digikam
-DIGIKAM_DB_USER=digikam_grouping
-DIGIKAM_DB_PASSWORD=secure_password
+export DIGIKAM_DB_HOST=mysql.example.com
+export DIGIKAM_DB_PORT=3306
+export DIGIKAM_DB_NAME=digikam
+export DIGIKAM_DB_USER=digikam_grouping
+export DIGIKAM_DB_PASSWORD=secure_password
 
 # Paths
-BACKUP_DIR=/path/to/backups
-LOG_FILE=/var/log/digikam-grouping.log
+export BACKUP_DIR=/path/to/backups
+export LOG_FILE=/var/log/digikam-grouping.log
 
 # Safety
-DRY_RUN=false
-BATCH_SIZE=100
+export DRY_RUN=false
 ```
 
 ### Step 5.2: Create Usage Documentation
@@ -552,7 +655,7 @@ BATCH_SIZE=100
 #!/bin/bash
 set -e
 
-# Load environment
+# Load environment (variables must be exported in .env)
 source .env
 
 # Create backup
@@ -561,8 +664,16 @@ python src/cli.py --backup-only
 # Dry run first
 python src/cli.py --dry-run --input-dir "$1"
 
-# Confirm with user
-read -p "Proceed with actual grouping? (yes/no): " confirm
+# Confirm with user (skip if non-interactive or --yes flag passed)
+if [ "$2" = "--yes" ]; then
+    confirm="yes"
+elif [ -t 0 ]; then
+    read -p "Proceed with actual grouping? (yes/no): " confirm
+else
+    echo "Non-interactive mode: use --yes flag as second argument to skip confirmation"
+    confirm="no"
+fi
+
 if [ "$confirm" = "yes" ]; then
     python src/cli.py --input-dir "$1"
 fi
@@ -642,7 +753,7 @@ fi
 ## Deliverables Checklist
 
 - [ ] `src/xmp_parser.py` - XMP parsing module
-- [ ] `src/database.py` - Database operations module
+- [ ] `src/database.py` - Database operations module (includes `test_connection()`)
 - [ ] `src/grouper.py` - Main grouping logic
 - [ ] `src/config.py` - Configuration management
 - [ ] `src/cli.py` - Command-line interface
@@ -650,8 +761,8 @@ fi
 - [ ] `README.md` - User documentation
 - [ ] `OPERATIONS.md` - Operational procedures
 - [ ] `requirements.txt` - Python dependencies
-- [ ] `run_grouping.sh` - Execution script
-- [ ] `.env.example` - Configuration template
+- [ ] `run_grouping.sh` - Execution script (with `--yes` flag support)
+- [ ] `.env.example` - Configuration template (with `export` statements)
 
 ---
 
@@ -660,12 +771,16 @@ fi
 | Risk | Mitigation |
 |------|-----------|
 | Database corruption | Transaction wrapping with rollback on any error, `mysqldump` backup before execution, dry-run mode |
-| Performance issues | Batch processing, single connection (no pooling overhead), progress reporting |
+| Password exposure | Use `--defaults-extra-file` with temp file for mysqldump, never pass password on command line |
+| Performance issues | Single JOIN query for path resolution, single connection (no pooling overhead), progress reporting |
 | Invalid XMP data | Graceful error handling in parser (return `None`), skip bad files with warning |
 | Concurrent modifications | Check `groupImage = -1` before updating (atomic conditional UPDATE), off-peak execution |
 | Lost database connection | Transaction rollback on connection error, idempotent operations (re-running won't create duplicate groups if `groupImage = -1` check is used) |
 | Images already in groups | Conditional UPDATE (`WHERE groupImage = -1`) prevents overwriting existing groups; raises error if conflict detected |
 | Path resolution failures | Log warning for each unresolvable path, continue processing remaining images |
+| Ambiguous AlbumRoot matches | Log warning and skip if multiple roots match a single path |
+| Non-interactive script failure | `run_grouping.sh` detects terminal and supports `--yes` flag |
+| Schema mismatch | Stop and report if `groupImage` column or `relativePath` format differs from expected |
 
 ---
 
@@ -695,5 +810,8 @@ fi
 2. **Test each module independently** before integrating
 3. **Always run with `--dry-run` first** on any real data
 4. **The `WHERE groupImage = -1` condition in UPDATE statements is critical** — it prevents overwriting existing groups and makes the operation safe to re-run
-5. **If the schema verification in Step 1.1 reveals different column names or semantics**, update all SQL queries accordingly before proceeding
+5. **If the schema verification in Step 1.1 reveals different column names or semantics**, STOP and report the actual schema. Do not attempt to adapt the SQL queries without understanding the actual grouping mechanism.
 6. **Path separator handling**: Use `os.path` functions for cross-platform compatibility, but be aware DigiKam on Linux stores paths with `/` separators
+7. **The leader is NOT included in `member_image_ids`** — `create_group()` sets the leader's `groupImage` separately from the members
+8. **`cursor = None` must be initialized before the `try` block** in `create_group_safe()` to avoid `NameError` in the `finally` block if `start_transaction()` fails
+9. **`.env` file must use `export`** for each variable so they are available as environment variables to the Python child process
