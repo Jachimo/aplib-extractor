@@ -4,6 +4,8 @@
 
 Create a Python utility that groups DigiKam images based on a custom `aplib:MasterUUID` field stored in XMP sidecar files. The utility must safely operate against a production MySQL database shared by multiple applications, handling hundreds to thousands of images efficiently.
 
+> Status note: parts of this plan were originally drafted using a `Images.groupImage` assumption. The validated model is `ImageRelations` with `type=2` (`DatabaseRelation::Grouped`). Any section below that still mentions `groupImage` should be treated as historical/outdated and updated before execution.
+
 ## Background & Context
 
 ### Data Structure
@@ -19,20 +21,21 @@ Create a Python utility that groups DigiKam images based on a custom `aplib:Mast
 
 ### Key Finding: DigiKam Group Storage Mechanism
 
-DigiKam does **NOT** use separate `ImageGroups` or `ImageGroupProperties` tables. Image grouping is handled through a single column `groupImage` on the `Images` table:
+Based on DigiKam source (`coredbconstants.h`, `iteminfo.cpp`, `coredb.cpp`, `dbconfig.xml.cmake.in`), grouping is stored in `ImageRelations`, not an `Images.groupImage` column:
 
-- **`groupImage = -1`**: Image is not part of any group (default)
-- **`groupImage = <own id>`**: Image is a group leader
-- **`groupImage = <leader's id>`**: Image is a group member, pointing to the leader's image ID
+- `DatabaseRelation::Grouped = 2`
+- Group membership is an edge: `ImageRelations.subject = member_id`, `ImageRelations.object = leader_id`, `ImageRelations.type = 2`
+- Group edits use relation operations equivalent to:
+    - remove existing grouped relation(s) from subject
+    - add `subject -> leader` relation with `type=2`
 
 To create a group with leader ID 100 and members 101, 102:
 ```sql
-UPDATE Images SET groupImage = 100 WHERE id = 100;  -- leader points to itself
-UPDATE Images SET groupImage = 100 WHERE id = 101;  -- member points to leader
-UPDATE Images SET groupImage = 100 WHERE id = 102;  -- member points to leader
+INSERT INTO ImageRelations (subject, object, type) VALUES (101, 100, 2);
+INSERT INTO ImageRelations (subject, object, type) VALUES (102, 100, 2);
 ```
 
-Direct SQL is required — there is no Python library that exposes DigiKam group manipulation APIs.
+Direct SQL is required — there is no supported Python API for DigiKam group manipulation.
 
 ### Known Schema (Verify Against Source)
 
@@ -69,12 +72,18 @@ CREATE TABLE Images (
     modificationDate DATETIME,
     fileSize INTEGER NOT NULL DEFAULT 0,
     uniqueHash TEXT,
-    manualOrder INTEGER NOT NULL DEFAULT 0,
-    groupImage INTEGER DEFAULT -1      -- -1 = no group, <own id> = leader, <leader id> = member
+    manualOrder INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE ImageRelations (
+    subject BIGINT,
+    object BIGINT,
+    type INTEGER,
+    UNIQUE(subject, object, type)
 );
 ```
 
-**IMPORTANT**: These schema definitions are from training data knowledge and should be verified against the actual source. See Step 1.1 for verification instructions. **If the `groupImage` column does not exist or has different semantics, STOP and report the actual schema before proceeding. Do not attempt to adapt the SQL queries without understanding the actual grouping mechanism.**
+**IMPORTANT**: These schema definitions must still be verified against the live target DB before writes. If the live DB differs, stop and reconcile before applying any grouping updates.
 
 ---
 
