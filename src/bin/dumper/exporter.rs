@@ -548,6 +548,16 @@ fn export_job_files(
                 job.master_uuid
             );
         }
+
+        // Prefer Aperture's original version UUID for digiKam identity on master exports.
+        // Fall back to master UUID when original version UUID is absent.
+        let master_image_unique_id = master
+            .original_version_uuid
+            .as_deref()
+            .filter(|uuid| !uuid.trim().is_empty())
+            .unwrap_or(&job.master_uuid);
+        XmpProperty::new(ns::NS_DIGIKAM, "ImageUniqueID")
+            .put_into_xmp(master_image_unique_id, &mut xmp);
     }
     let xmp_string = xmp
         .serialize(SerialFlags::default(), 0)
@@ -720,6 +730,9 @@ fn export_job_files(
             XmpProperty::new(ns::APLIB, "MasterUUID").put_into_xmp(&job.master_uuid, &mut xmp);
             XmpProperty::new(ns::APLIB, "MasterFilename")
                 .put_into_xmp(&job.master_filename, &mut xmp);
+
+            // Use Aperture version UUID as digiKam's unique image identity.
+            XmpProperty::new(ns::NS_DIGIKAM, "ImageUniqueID").put_into_xmp(version_uuid, &mut xmp);
         }
         let xmp_string = xmp
             .serialize(SerialFlags::default(), 0)
@@ -1675,6 +1688,15 @@ mod tests {
 
         let master_xmp = read_xmp_from_file(&exported_master_sidecar);
         assert_xmp_property_eq(&master_xmp, ns::APLIB, "MasterUUID", &master_uuid);
+        assert_xmp_property_eq(
+            &master_xmp,
+            ns::NS_DIGIKAM,
+            "ImageUniqueID",
+            &master
+                .original_version_uuid
+                .clone()
+                .expect("master fixture should include original version uuid"),
+        );
         let master_xmp_text = read_xmp_text(&exported_master_sidecar);
         assert!(master_xmp_text.contains("<dc:title>"));
         assert!(master_xmp_text.contains("xml:lang=\"x-default\">PICT0019</rdf:li>"));
@@ -1695,6 +1717,12 @@ mod tests {
         let version_xmp = read_xmp_from_file(&exported_version_sidecar);
         let version_xmp_text = read_xmp_text(&exported_version_sidecar);
         assert_xmp_property_eq(&version_xmp, ns::NS_XMP, "VersionUUID", &edited_version_uuid);
+        assert_xmp_property_eq(
+            &version_xmp,
+            ns::NS_DIGIKAM,
+            "ImageUniqueID",
+            &edited_version_uuid,
+        );
         assert_xmp_property_eq(&version_xmp, ns::APLIB, "MasterUUID", &master_uuid);
         assert_xmp_property_eq(
             &version_xmp,
