@@ -11,6 +11,7 @@ use exempi2::Xmp;
 
 /// Define namespace constants until we can get them out of Exempi.
 pub mod ns {
+    pub const NS_XMPMETA: &str = "adobe:ns:meta/";
     pub const NS_DC: &str = "http://purl.org/dc/elements/1.1/";
     pub const NS_IPTC4XMP: &str = "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/";
     pub const NS_XMP: &str = "http://ns.adobe.com/xap/1.0/";
@@ -29,6 +30,12 @@ pub mod ns {
 /// Register non-standard namespaces we write during export.
 /// This is safe to call repeatedly.
 pub fn register_export_namespaces() {
+    if let Err(e) = exempi2::register_namespace(ns::NS_XMPMETA, "x") {
+        eprintln!(
+            "Warning: Failed to register XMP namespace '{}': {:?}",
+            ns::NS_XMPMETA, e
+        );
+    }
     if let Err(e) = exempi2::register_namespace(ns::APLIB, "aplib") {
         eprintln!("Warning: Failed to register XMP namespace '{}': {:?}", ns::APLIB, e);
     }

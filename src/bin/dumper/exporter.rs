@@ -1698,6 +1698,10 @@ mod tests {
                 .expect("master fixture should include original version uuid"),
         );
         let master_xmp_text = read_xmp_text(&exported_master_sidecar);
+        assert!(
+            master_xmp_text.starts_with("<?xpacket") || master_xmp_text.contains("<x:xmpmeta"),
+            "master sidecar must use an Exiv2-detectable XMP envelope"
+        );
         assert!(master_xmp_text.contains("<dc:title>"));
         assert!(master_xmp_text.contains("xml:lang=\"x-default\">PICT0019</rdf:li>"));
         assert!(master_xmp_text.contains("<photoshop:Headline>PICT0019</photoshop:Headline>"));
@@ -1716,6 +1720,10 @@ mod tests {
 
         let version_xmp = read_xmp_from_file(&exported_version_sidecar);
         let version_xmp_text = read_xmp_text(&exported_version_sidecar);
+        assert!(
+            version_xmp_text.starts_with("<?xpacket") || version_xmp_text.contains("<x:xmpmeta"),
+            "version sidecar must use an Exiv2-detectable XMP envelope"
+        );
         assert_xmp_property_eq(&version_xmp, ns::NS_XMP, "VersionUUID", &edited_version_uuid);
         assert_xmp_property_eq(
             &version_xmp,
