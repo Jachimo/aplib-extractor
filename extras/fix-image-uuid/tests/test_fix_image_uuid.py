@@ -3,7 +3,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from fix_image_uuid import process_sidecar
+from fix_image_uuid import process_sidecar, _has_image_unique_id
+
+
+def test_has_image_unique_id_detects_marker(tmp_path: Path) -> None:
+    sidecar = tmp_path / "has.xmp"
+    sidecar.write_text('<rdf:Description digiKam:ImageUniqueID="abc"/>', encoding="utf-8")
+    assert _has_image_unique_id(sidecar) is True
+
+    empty = tmp_path / "no.xmp"
+    empty.write_text("<rdf:Description/>", encoding="utf-8")
+    assert _has_image_unique_id(empty) is False
 
 
 def test_process_sidecar_preserves_xpacket_header_when_inserting_uuid(tmp_path: Path) -> None:

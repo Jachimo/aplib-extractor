@@ -175,8 +175,8 @@ def _normalize_xmpmeta_prefix(text: str) -> str:
     return normalized_text
 
 
-def _has_existing_image_unique_id_marker(path: Path) -> bool:
-    """Do a cheap text scan for ImageUniqueID before parsing XML.
+def _has_image_unique_id(path: Path) -> bool:
+    """Scan the file for an ImageUniqueID marker without parsing XML.
 
     Most sidecars already contain the field, so this avoids a full XML parse for
     the common unchanged case and makes large export trees much faster.
@@ -209,7 +209,7 @@ def process_sidecar(
     - "no_description": XMP packet has no rdf:Description node
     """
 
-    if not rewrite_all and _has_existing_image_unique_id_marker(path):
+    if not rewrite_all and _has_image_unique_id(path):
         return "unchanged", None
 
     raw_text = path.read_text(encoding="utf-8")
@@ -226,12 +226,14 @@ def process_sidecar(
     if existing and not rewrite_all:
         return "unchanged", None
 
-    source: Optional[str] = None
+    source: str
     updated_text = raw_text
 
     if not existing:
         value, source = _select_unique_id(root)
         updated_text = _insert_or_update_image_unique_id(updated_text, value)
+    else:
+        source = "rewrite:repair-envelope"
 
     updated_text = _normalize_xmpmeta_prefix(updated_text)
     updated_text = _ensure_xpacket_wrapper(updated_text)
@@ -243,17 +245,15 @@ def process_sidecar(
         return "unchanged", None
 
     if verbose:
-        print(f"updated {path} [{source or 'rewrite:repair-envelope'}]")
+        print(f"updated {path} [{source}]")
 
-    return "updated", source or "rewrite:repair-envelope"
+    return "updated", source
 
 
 def iter_sidecars(root: Path) -> Iterable[Path]:
     """Recursively yield .xmp files under root."""
 
-    for path in root.rglob("*"):
-        if path.is_file() and path.suffix.lower() == ".xmp":
-            yield path
+    yield from root.rglob("*.xmp")
 
 
 def main(argv: Optional[list[str]] = None) -> int:
