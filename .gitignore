@@ -1,6 +1,18 @@
 target
 
+# Never commit local environment files.
+.env
+.env.local
+.env.*.local
+
 # Generated NAS diagnostic captures may contain sensitive host/share details.
 extras/nas-diag-*/
 extras/export*
 extras/rsync*
+
+# Log and .out files may also contain sensitive information
+extras/*.log
+extras/*.out
+extras/**/*.log
+extras/**/*.out
+extras/digikam-group-utility/verification-output.txt

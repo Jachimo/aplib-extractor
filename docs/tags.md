@@ -2,125 +2,145 @@
 
 ## Background
 
-The names "Keywords" and "Tags" are used interchangably in this document to
-refer to a set of human-readable words that a user associates with a particular
-photo.
+This document uses Keywords and Tags interchangeably for user-assigned labels.
 
-Aperture allowed for hierarchial tags, e.g. "Location/Europe/France/Paris".
+Aperture supported hierarchical tags such as `Location/Europe/France/Paris`.
+When migrating to digiKam, keyword interoperability matters because album/project
+structure may not map directly.
 
-Many other photo management applications have a similar concept, and they can
-be important links between photos taken on a specific project, at a time, or 
-in a place, especially when they are exported and information about how they
-were categorized in Aperture's Albums is potentially lost.
+There is no universal XMP convention for keyword storage across applications:
+some tools use ordered lists, some unordered lists, and hierarchy separators vary.
 
-Unfortunately, there's no broad agreement between different applications what
-XMP property should be used to store tags/keywords.
+## Scope and Confidence
 
-Some applications use ordered lists, some are unordered.
-Some allow for hierarchical tags, with defined separator characters, some don't.
+This file is intentionally source-backed.
 
-## DigiKam Handling (Source-Backed)
+- Source-backed means behavior confirmed from digiKam/Exiv2 code or official docs.
+- Operational observation means behavior seen in live logs and DB checks during this project.
 
-This section describes what DigiKam actually parses, based on DigiKam source code and the official manual.
+Where possible, claims are tagged with references.
 
-### What DigiKam treats as tag hierarchy
+## digiKam Tag Mapping (Source-Backed)
 
-- DigiKam's metadata settings define the Tags category as nested keyword hierarchy under XMP-first behavior [D1].
-- In DigiKam defaults, the first tag mapping is `Xmp.digiKam.TagsList` with:
-  - tag mode `TAGPATH`
-  - separator `/`
-  - storage type `TAG_XMPSEQ`
-  This is defined in source, not inferred [S1].
-- DigiKam also maps other tag namespaces for interoperability, including:
-  - `Xmp.lr.hierarchicalSubject` with separator `|` [S1]
-  - `Xmp.dc.subject` as flat tags (not hierarchical path mode) [S1]
+### Hierarchical tag semantics
 
-### How DigiKam reads/writes XMP tag containers
+- digiKam metadata settings treat Tags as hierarchical and recommend XMP-first interoperability [D1].
+- Default mapping includes `Xmp.digiKam.TagsList` with tag mode `TAGPATH`, separator `/`, storage `TAG_XMPSEQ` [S1].
+- Additional mappings include `Xmp.lr.hierarchicalSubject` using `|` and flat `Xmp.dc.subject` interoperability mappings [S1].
 
-- For mappings configured as `TAG_XMPSEQ`, DigiKam reads with `getXmpTagStringSeq(...)` [S2].
-- For mappings configured as `TAG_XMPBAG`, DigiKam reads with `getXmpTagStringBag(...)` [S2].
-- When writing an XMP mapping configured as `TAG_XMPSEQ`, DigiKam writes with `setXmpTagStringSeq(...)` [S3].
-- For `TAGPATH` mappings, DigiKam keeps `/` as the canonical internal hierarchy delimiter and only applies conversion when a mapping uses a different separator [S2][S3].
+### Read/write container behavior
 
-### Critical parser behavior (why formatting matters)
+- `TAG_XMPSEQ` mappings are read via `getXmpTagStringSeq(...)` [S2].
+- `TAG_XMPBAG` mappings are read via `getXmpTagStringBag(...)` [S2].
+- `TAG_XMPSEQ` mappings are written via `setXmpTagStringSeq(...)` [S3].
+- `TAGPATH` mappings keep `/` as canonical internal hierarchy delimiter and convert only when mapping separators differ [S2][S3].
 
-- DigiKam's tag database path parser splits tag paths on `/` directly:
-  - `tagForPath(...)` uses `path.split('/')` [S4]
-  - `createTag(...)` uses `tagPathToCreate.split('/')` [S4]
-- There is no dedicated unescape pass for escaped slash forms like `\/` in these path parsers [S4].
+### Path parser implications
 
-Practical consequence:
+- Tag-path parsing in the tag cache splits directly on `/` (`tagForPath`, `createTag`) [S4].
+- There is no dedicated unescape stage for escaped slash forms.
 
-- If a literal `/` appears inside one intended tag name, DigiKam will interpret it as hierarchy boundary, not as a character in the same segment.
-- In other words, slash escaping is not a safe round-trip strategy for DigiKam tag-path ingestion.
+Practical result:
 
-### Formatting rules for exporter output
+- A literal `/` inside one logical label is interpreted as a hierarchy boundary.
+- Escaping slash is not a reliable round-trip representation for digiKam tag paths.
 
-Use these rules when generating sidecar tags intended for DigiKam import:
+## XMP Sidecar Parse Requirements (Critical)
 
-1. Write `digiKam:TagsList` as `rdf:Seq` of `rdf:li` strings, where each `li` is a full hierarchy path using `/` between levels [S1][S2][S3].
-2. Keep `dc:subject` as flat keyword values for interoperability with non-hierarchical consumers [S1][S2].
-3. Do not emit tab-delimited, multi-space-delimited, or custom escaped hierarchy syntax inside `digiKam:TagsList`; DigiKam path parsing is slash-based [S2][S4].
-4. Treat `/` inside a single logical tag label as non-representable in DigiKam path semantics without changing meaning (it becomes another level) [S4].
+### Exiv2 sidecar type gate
 
-### Sidecar ingestion requirements (operational)
+Exiv2 sidecar detection (`isXmpType`) accepts files that start (after optional XML declaration/BOM) with either:
 
-- DigiKam must be configured to read sidecars (or synchronize from files to database) for sidecar changes to populate the DB-backed tag tree [D2][D3].
-- Manual priority guidance recommends XMP on top for interoperability [D1].
+- `<?xpacket ...` or
+- `<x:xmpmeta ...`
 
-## Export Behavior
+This behavior is in Exiv2 `xmpsidecar.cpp` [S5].
 
-Relevant code: Master images see `master.rs`, lines 344-363; and Versions see `version.rs`, lines 203-222.
+Operational consequence observed in this project:
 
-Keyword tags are written both to:
-- `dc:subject` (rdf:Bag): Flat keyword names for compatibility
-- `digiKam:TagsList` (rdf:Seq): Full hierarchical paths for digiKam
+- Sidecars with non-canonical envelope/prefix (for example `ns0:xmpmeta`) can be rejected by Exiv2 as unknown image type.
+- digiKam then logs `Cannot load XMP sidecar ... (unknown image type)` because sidecar loading is delegated through Exiv2 [S6], which matched live logs in this migration.
 
-Example XMP output:
+### Why blank XMP pane happens
 
-```xml
-<!-- Flat keywords for compatibility -->
-<dc:subject>
-<rdf:Bag>
-	<rdf:li>Location</rdf:li>
-	<rdf:li>Europe</rdf:li>
-	<rdf:li>France</rdf:li>
-</rdf:Bag>
-</dc:subject>
+- digiKam XMP widget returns empty when `DMetadata::hasXmp()` is false [S7].
+- `hasXmp()` reflects whether Exiv2-loaded XMP metadata container is non-empty [S8].
 
-<!-- Full hierarchical paths for digiKam -->
-<digiKam:TagsList>
-<rdf:Seq>
-	<rdf:li>Location</rdf:li>
-	<rdf:li>Location/Europe</rdf:li>
-	<rdf:li>Location/Europe/France</rdf:li>
-</rdf:Seq>
-</digiKam:TagsList>
-```
+If sidecar parse fails, XMP metadata remains unavailable and the XMP pane can appear blank.
+
+## Sidecar Read/Merge and Scan Flow
+
+### Read pipeline
+
+- `MetaEngine::load(file)` reads embedded metadata first, then calls `loadFromSidecarAndMerge(file)` [S6].
+- Sidecar merge is gated by `useXMPSidecar4Reading` [S6].
+- On successful sidecar load, sidecar XMP replaces file XMP in merge logic (`xmpMetadata() = xmpsidecar->xmpData()`) [S9].
+
+### Scan/rescan gating
+
+- Collection scan compares file mtime/size, and optionally sidecar mtime when sidecar reading and timestamp update are enabled [S10].
+- If changed and `rescanImageIfModified` is true, scanner performs full rescan path (`rescanFile`) [S10].
+- digiKam tests confirm behavior differs when `rescanImageIfModified` is true vs false [S11].
+
+Operationally this explains why sidecar edits may not populate DB tags until a full metadata rescan path runs.
+
+## Exporter Rules for digiKam Compatibility
+
+### Required output format
+
+1. Write `digiKam:TagsList` as `rdf:Seq` with one full path per `rdf:li`, using `/` between levels [S1][S2][S3].
+2. Write `dc:subject` as flat keyword values (interop for non-hierarchical consumers) [S1][S2].
+3. Do not emit alternate custom hierarchy delimiters inside `digiKam:TagsList` values.
+4. Do not rely on escaped slash within one label; `/` will be parsed as hierarchy separator [S4].
+5. Ensure sidecar envelope is Exiv2-detectable (`x:xmpmeta` and/or `xpacket`) [S5].
+
+### Current aplib-extractor implementation
+
+- Keyword interop writing is centralized in `src/xmp.rs` (`write_interop_keywords`).
+- Master and version serializers apply resolved keyword sets in `src/master.rs` and `src/version.rs`.
+- Export regression test validates DigiKam-facing fields and now also asserts Exiv2-detectable sidecar envelope in `src/bin/dumper/exporter.rs`.
+
+## Notes on DB Storage (Operational)
+
+The following are observed in this project and should be treated as operational facts, not digiKam schema specification:
+
+- Tag assignment checks were validated against `ImageTags` and `Tags` in the active DB.
+- Identity linkage checks used `ImageHistory.uuid` for `digiKam:ImageUniqueID` workflows.
+
+These checks are useful for migration verification, but source-level schema references are preferred when documenting long-term contracts.
 
 ## References
 
-### DigiKam source code (commit 93bcadb8fbdac34852043e587215e32ea3e00376)
+### digiKam / Exiv2 Source
 
-- [S1] `core/libs/metadataengine/dmetadata/dmetadatasettingscontainer.cpp` lines 376-430
-	- Default tag mappings, including `Xmp.digiKam.TagsList` as `TAG_XMPSEQ` with separator `/`, and `Xmp.lr.hierarchicalSubject` with separator `|`.
-- [S2] `core/libs/metadataengine/dmetadata/dmetadata_tags.cpp` lines 59-105
-	- Read path behavior: `TAG_XMPSEQ` reads with `getXmpTagStringSeq`, `TAG_XMPBAG` with `getXmpTagStringBag`, separator conversion rules.
-- [S3] `core/libs/metadataengine/dmetadata/dmetadata_tags.cpp` lines 254-279
-	- Write path behavior: `TAGPATH` mapping + `setXmpTagStringSeq` for sequence-backed mappings.
-- [S4] `core/libs/database/tags/tagscache.cpp` lines 603-667
-	- Path parsing/creation split directly on `/`.
+- [S1] `core/libs/metadataengine/dmetadata/dmetadatasettingscontainer.cpp`
+	- Default tag mappings (`Xmp.digiKam.TagsList`, separators, container types).
+- [S2] `core/libs/metadataengine/dmetadata/dmetadata_tags.cpp` (read path)
+	- `getXmpTagStringSeq`, `getXmpTagStringBag`, separator conversion.
+- [S3] `core/libs/metadataengine/dmetadata/dmetadata_tags.cpp` (write path)
+	- Sequence write behavior for TAGPATH mappings.
+- [S4] `core/libs/database/tags/tagscache.cpp`
+	- Tag path parsing/creation split directly on `/`.
+- [S5] Exiv2 `src/xmpsidecar.cpp`
+	- `isXmpType(...)` sidecar detection (`<?xpacket` or `<x:xmpmeta` after XML declaration/BOM handling).
+- [S6] `core/libs/metadataengine/engine/metaengine_fileio.cpp`
+	- `MetaEngine::load` and `loadFromSidecarAndMerge`; sidecar load exception path.
+- [S7] `core/libs/widgets/metadata/xmpwidget.cpp`
+	- `loadFromURL`/`decodeMetadata` require `hasXmp()`.
+- [S8] `core/libs/metadataengine/engine/metaengine_xmp.cpp`
+	- `MetaEngine::hasXmp()` returns true only when XMP container is non-empty.
+- [S9] `core/libs/metadataengine/engine/metaengine_p.cpp`
+	- Sidecar merge behavior where sidecar XMP dominates file XMP.
+- [S10] `core/libs/database/collection/collectionscanner_scan.cpp`
+	- mtime/size + sidecar-mtime modification detection and rescan branch.
+- [S11] `core/tests/timestampupdate/timestampupdatetest.cpp`
+	- Behavior difference with `rescanImageIfModified` true/false.
 
-### DigiKam official docs
+### Official Documentation
 
-- [D1] Metadata Settings manual page:
+- [D1] Metadata Settings:
 	- https://docs.digikam.org/en/setup_application/metadata_settings.html
-	- Source text with line context: https://docs.digikam.org/en/_sources/setup_application/metadata_settings.rst.txt
-	- Relevant points: Tags are nested hierarchy under XMP-first guidance; advanced mappings and priorities.
-- [D2] Sidecar behavior in Metadata Settings:
-	- https://docs.digikam.org/en/_sources/setup_application/metadata_settings.rst.txt (lines around 67-88)
-	- Relevant points: read from sidecar only option and sidecar write modes.
-- [D3] Metadata Synchronizer manual page:
+- [D2] Metadata settings source text (sidecar and mapping options):
+	- https://docs.digikam.org/en/_sources/setup_application/metadata_settings.rst.txt
+- [D3] Metadata Synchronizer (files -> database workflow):
 	- https://docs.digikam.org/en/maintenance_tools/maintenance_metadata.html
-	- Source text: https://docs.digikam.org/en/_sources/maintenance_tools/maintenance_metadata.rst.txt
-	- Relevant points: synchronization direction includes files -> database.

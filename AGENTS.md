@@ -1,174 +1,339 @@
 # AGENTS.md
 
-This file provides technical documentation about the aplib-extractor codebase for AI agents.
-
+This file documents the current behavior of the aplib-extractor repository for coding agents.
 ## Overview
 
-This is a Rust tool for extracting data from Apple Aperture 3.x libraries. It parses the proprietary `.aplib` bundle format (plists and SQLite database) to enable migration to other photo management systems. This fork adds export functionality with XMP sidecar generation.
+This repository is now focused on Aperture-to-filesystem export for DigiKam migration.
+Current moving pieces:
 
-## Build and Run Commands
+- Rust library code for parsing Aperture `.aplibrary` bundles.
+- One supported CLI binary, `export`, implemented in `src/bin/dumper/`.
+- Helper utilities under `extras/`, notably:
+  - `extras/digikam-group-utility/` for grouping DigiKam images by shared `aplib:MasterUUID`.
+  - `extras/fix-image-uuid/` for backfilling `digiKam:ImageUniqueID` into existing XMP sidecars.
+The legacy multi-command CLI is gone. The supported invocation is:
+
+```bash
+cargo run --bin export -- [OPTIONS] <LIBRARY_PATH>
+```
+## Build And Test Commands
 
 ```bash
 # Build the export binary
 cargo build --release
 
-# Run export (export-only CLI)
-cargo run --bin export -- [OPTIONS] <LIBRARY_PATH>
-
-# Common commands
+# Run export
 cargo run --bin export -- --out-dir ./output ~/Pictures/MyLibrary.aplibrary
 cargo run --bin export -- --dryrun ~/Pictures/MyLibrary.aplibrary
 
-# Tests (if present)
+# Export with throttled I/O for fragile NAS storage
+cargo run --bin export -- --nas-safe --out-dir ./output ~/Pictures/MyLibrary.aplibrary
+
+# Full test suite
 cargo test
 
-# Exporter-focused regression tests
+# Exporter-focused regression coverage
 cargo test --bin export exporter::tests:: -- --nocapture
 ```
+## Repository Scope
 
-## Architecture
+The live migration path is centered on a reduced set of Aperture object types:
 
-### Core Data Model
+- `Master`: original image records and source image paths.
+- `Version`: edited/export variants and the plist locations that describe them.
+- `Keyword`: keyword hierarchy used to resolve Aperture keyword UUIDs into DigiKam-facing tags.
+- `Volume`: still exists in the shared library for path-resolution support, but is not part of the main export workflow.
 
-The remaining live migration path is centered on a small set of Aperture objects:
+The export cache currently stores only masters and versions.
+## Aperture Library Layout
 
-- **Masters** - original image records and source image paths
-- **Versions** - edited/export variants plus metadata plist locations
-- **Keywords** - keyword hierarchy used to resolve Aperture keyword UUIDs into DigiKam-facing tags
-- **Volumes** - legacy path-resolution support still present in the shared library, but not part of the main export workflow
+General format notes live in `docs/format.md`. The implementation supports two practical layouts:
 
-The export-only binary now caches only master and version objects.
+1. Root-level layout:
+  - `Info.plist`
+  - `Masters/`
+  - `Keywords.plist`
 
-### Aperture Library Structure
+2. Database subdirectory layout:
+  - `Database/Keywords.plist`
+  - `Database/Versions/` containing metadata plists only (`.apversion`, `.apmaster`)
+  - `Database/apdb/Library.apdb`
+  - `Masters/` containing the real image files for both masters and versions
 
-General notes on the format of Aperture libraries (`.aplibrary` bundles) is provided in the `docs/format.md` file.
-This file should be read to understand what is known about the format.
+Critical distinction:
 
-In brief: Aperture Library bundles have two possible directory layouts:
+- Version metadata lives under `Database/Versions/.../UUID/`.
+- Version image files do not live there. They live in `Masters/YYYY/MM/DD/YYYYMMDD-HHMMSS/`.
 
-1. **Root-level structure** (possibly older libraries):
-   - `Info.plist` - Bundle metadata
-   - `Masters/` - Original image files
-   - `Keywords.plist` - Keyword hierarchy
+`Version.source_directory` captures the plist location in the Versions tree. The exporter transforms that path into the corresponding Masters tree path via `transform_versions_to_masters_path()` and then searches for the actual image file.
+## Export Pipeline
 
-2. **Database subdirectory structure** (possibly newer libraries):
-   - `Database/Keywords.plist`
-   - `Database/Versions/` - **METADATA ONLY** (`.apversion` and `.apmaster` plist files)
-   - `Database/apdb/Library.apdb` - SQLite database
-   - `Masters/` - **Actual image files** for both masters AND versions
+The `export` binary is implemented by `src/bin/dumper/main.rs` and `src/bin/dumper/exporter.rs`.
 
-**CRITICAL**: Version image files are stored in `Masters/YYYY/MM/DD/YYYYMMDD-HHMMSS/`, 
-NOT in the `Database/Versions/` tree. The Versions tree contains only metadata plist files.
+High-level flow:
 
-The code in `library.rs` handles both layouts via `resolve_subdir()`.
+1. Parse CLI args.
+2. Resolve keyword maps from the Aperture keyword hierarchy.
+3. Load or rebuild a local cache of masters and versions.
+4. Build one `ExportJob` per master.
+5. Copy the master image.
+6. Find, copy, or materialize each non-original version image.
+7. Write XMP sidecars for the master and each version.
+8. Append checkpoint log entries while exporting.
 
-### Actual Library Example Structure
+### Export Jobs
 
-An example of an actual `Aperture Library.aplibrary` bundle is provided (in the form
-of output from the Linux `tree` command) in the file `docs/structure.txt`. 
+Each `ExportJob` groups:
 
-NOTE: This file is quite large (40+ MB), use caution when reading/parsing it.
+- one master UUID,
+- its source image path,
+- its output-relative directory,
+- zero or more non-original versions,
+- stable exported filenames for those versions.
 
-If this is available, it should be used to resolve ambiguities or bugs in the code.
+Version filenames are derived from:
 
-### Key Relationships
+- the master stem,
+- the Aperture version name when available,
+- a short UUID token as a deterministic dedupe fallback.
 
-- **Masters** are original images, stored in `Masters/YYYY/MM/DD/YYYYMMDD-HHMMSS/` with date-based paths
-- **Versions** are edited variants:
-  - **Metadata** (plist files): stored in `Database/Versions/YYYY/MM/DD/YYYYMMDD-HHMMSS/UUID/`
-  - **Image files**: stored in `Masters/YYYY/MM/DD/YYYYMMDD-HHMMSS/` (same location as masters!)
-- **Volumes** represent external storage locations (can be in plist files or SQLite database)
+The exporter deliberately avoids basename collisions by appending UUID-derived suffixes when necessary.
 
-**Key Insight**: Version images and master images share the same directory structure in `Masters/`. 
-Only the metadata plists are separated into `Database/Versions/` with UUID subdirectories.
+### Metadata-Only Versions
 
-### Export Functionality
+Some Aperture versions are metadata-only and point at the same image file as the master.
 
-The export-only CLI (`src/bin/dumper/exporter.rs`):
-1. Loads keywords plus all master/version objects needed for export
-2. Uses a local cache file (`/tmp/aplib_cache_*.bin`) to speed up repeated operations on network-mounted libraries
-3. Generates `ExportJob` structs that group masters with their versions
-4. **Transforms Version paths**: Converts `Database/Versions/.../UUID/` paths to `Masters/.../` paths to locate actual image files
-5. Copies image files and generates XMP sidecars containing:
-   - Standard EXIF/IPTC metadata
-   - Aperture-specific metadata in custom `aplib:` namespace
-   - Resolved keyword names (converted from UUIDs)
-   - Original library path information
+For these cases, the exporter still materializes a separate version image filename in the output directory so that importers such as DigiKam see a matching image basename for the version sidecar. It attempts:
 
-### Export Regression Baseline
+1. hard-linking the exported master file to the version filename,
+2. copying the file if hard-linking fails.
 
-There is now a migration-focused golden export test in [src/bin/dumper/exporter.rs](/home/jtuttle/src/aplib-extractor/src/bin/dumper/exporter.rs):
+### I/O Throttling And NAS Safety
+
+The exporter supports throttled I/O for unstable network storage.
+
+Relevant CLI flags:
+
+- `--nas-safe`
+- `--max-write-mib-per-sec`
+- `--max-read-mib-per-sec`
+- `--io-delay-ms`
+- `--io-chunk-kib`
+
+`--nas-safe` currently defaults to approximately:
+
+- 4 MiB/s read limit,
+- 4 MiB/s write limit,
+- 20 ms delay between operations,
+- 64 KiB chunk size.
+
+### Checkpoint Logging
+
+Non-dry-run exports write `export-checkpoint.log` in the output directory.
+
+The log records:
+
+- a `run` header,
+- one line per exported master,
+- one line per exported version sidecar,
+- a final `done` summary with aggregate I/O stats.
+
+This log is meant for resumability diagnostics and post-run auditing.
+
+## Cache Behavior
+
+The export binary maintains a cache file at:
+
+```text
+/tmp/aplib_cache_<hash>.bin
+```
+
+Important details:
+
+- Despite the `.bin` suffix and the `bincode` dependency in `Cargo.toml`, the current cache implementation uses `serde_json` read/write in `src/bin/dumper/main.rs`.
+- The hash includes the library path and the library bundle modification time when available.
+- Cache contents currently include:
+  - `HashMap<String, Version>`
+  - `HashMap<String, Master>`
+- The cache assumes the source library is effectively read-only during export.
+
+If you hit path-resolution failures caused by stale cached objects, clearing `/tmp/aplib_cache_*.bin` is the intended recovery path.
+
+## XMP Output Behavior
+
+XMP helper code lives in `src/xmp.rs`. Aperture object serializers live primarily in `src/master.rs` and `src/version.rs`.
+
+### Namespaces Written During Export
+
+The exporter registers and uses at least these namespaces:
+
+- `aplib:` for Aperture-specific provenance fields
+- `digiKam:`
+- `dc:`
+- `xmp:`
+- `photoshop:`
+- `exif:`
+- `tiff:`
+- `MicrosoftPhoto:`
+- `lr:`
+- `mediapro:`
+
+### Master Sidecars
+
+Master sidecars include, among other fields:
+
+- `aplib:MasterUUID`
+- `aplib:OriginalVersionUUID` when available
+- title/headline/date metadata
+- resolved keyword metadata
+- `ApertureLibraryPath` provenance
+- `digiKam:ImageUniqueID`
+
+Current `digiKam:ImageUniqueID` behavior for master sidecars:
+
+1. use `original_version_uuid` when present,
+2. otherwise fall back to the master UUID.
+
+### Version Sidecars
+
+Version sidecars include, among other fields:
+
+- `xmp:VersionUUID`
+- `xmp:VersionFileName`
+- `tiff:FileName`
+- `xmp:Rating`
+- `xmp:CreateDate`
+- `exif:DateTimeOriginal`
+- `digiKam:PickLabel`
+- `digiKam:ColorLabel`
+- `aplib:MasterUUID`
+- `aplib:MasterFilename`
+- `ApertureLibraryPath`
+- `digiKam:ImageUniqueID`
+
+Current `digiKam:ImageUniqueID` behavior for version sidecars:
+
+- always use the Aperture version UUID.
+
+This was added specifically to make DigiKam identity resolution more robust and to support post-import metadata refresh behavior.
+
+### Keyword Serialization
+
+Keyword handling is broader than a single field.
+
+Current behavior:
+
+- Aperture keyword UUIDs are resolved to human-readable names using the keyword maps.
+- Non-UUID strings are preserved as direct names, which matters for iPhoto-imported libraries.
+- Hierarchical keywords are split on 2+ consecutive spaces.
+- Keyword strings are sanitized before XML serialization.
+
+Interop output is written across several namespaces:
+
+- flat keywords to `dc:subject`
+- hierarchical keywords to `digiKam:TagsList`
+- companion hierarchical forms to `MicrosoftPhoto:LastKeywordXMP`, `lr:hierarchicalSubject`, and `mediapro:CatalogSets`
+
+## DigiKam Helper Utilities
+
+### `extras/digikam-group-utility`
+
+This Python utility groups DigiKam images that share the same `aplib:MasterUUID` in exported sidecars.
+
+Current behavior:
+
+- scans exported image trees recursively,
+- parses sidecars for `aplib:MasterUUID`,
+- resolves DigiKam `Images.id` rows by layered fallback,
+- writes grouping edges to `ImageRelations` with `type = 2`.
+
+Current resolver order is important:
+
+1. direct DigiKam UUID match through `ImageHistory.uuid` when `digiKam:ImageUniqueID` is present,
+2. path-based match through `Images`, `Albums`, and `AlbumRoots`,
+3. sidecar-derived alternate filename hints,
+4. same-name plus file-size match,
+5. global unique file-size match.
+
+The utility logs diagnostic reasons such as:
+
+- `no_name_match`
+- `dir_mismatch`
+- `size_ambiguous`
+- `global_size_ambiguous`
+- `history_uuid_ambiguous`
+
+It also supports:
+
+- `--dry-run`
+- `--backup`
+- `--backup-only`
+- direct DB credential CLI overrides in addition to environment variables
+
+### `extras/fix-image-uuid`
+
+This Python helper exists for already-exported trees that predate the current exporter behavior.
+
+It recursively scans `.xmp` sidecars and writes missing `digiKam:ImageUniqueID` values using this precedence:
+
+1. `xmp:VersionUUID`
+2. `aplib:OriginalVersionUUID`
+3. `aplib:MasterUUID`
+4. generated UUIDv4
+
+Normally, fresh exports should not need this helper because the exporter now writes `digiKam:ImageUniqueID` automatically.
+
+## Validation Guardrails
+
+The main regression test for export behavior is:
 
 - `test_export_fixture_library_writes_expected_files_and_digikam_xmp_fields`
 
-This test uses the synthetic bundle in [testdata](testdata) and should be treated as the main behavioral guardrail when simplifying the codebase. It asserts:
+It asserts:
 
-- one real master-plus-version export path end-to-end
-- expected emitted filenames in the output directory
-- creation of matching XMP sidecars
-- presence of DigiKam-critical serialized XMP fields such as `dc:title`, `photoshop:Headline`, `xmp:CreateDate`, `exif:DateTimeOriginal`, `digiKam:PickLabel`, and `digiKam:ColorLabel`
-- preservation of provenance fields in the `aplib:` namespace
+- one real master-plus-version export path end-to-end,
+- expected output filenames,
+- creation of both master and version XMP sidecars,
+- important DigiKam-facing fields including `digiKam:PickLabel`, `digiKam:ColorLabel`, and `digiKam:ImageUniqueID`,
+- preservation of `aplib:` provenance fields.
 
-When refactoring, keep this test green first, then widen coverage with additional fixture cases.
+Other notable exporter tests cover:
 
-The legacy subcommand-style invocation has been removed. If a script or example passes `export`, `dump`, `list`, `audit`, or `tree` as the first positional argument, the CLI now rejects it and tells the user to run `export [OPTIONS] <LIBRARY_PATH>` instead.
+- metadata-only version materialization,
+- version filename sorting and dedupe behavior,
+- fallback behavior when cached versions lack `source_directory`,
+- checkpoint log append behavior,
+- I/O throttle defaults and overrides.
 
-### Refactor Safety Rules
+When changing export behavior, keep `cargo test --bin export exporter::tests:: -- --nocapture` green first.
 
-When simplifying this fork toward a migration-only tool, apply these rules:
+## Important Implementation Notes
 
-- Preserve the end-to-end export contract before removing inherited features.
-- Run `cargo test --bin export exporter::tests:: -- --nocapture` after any export-path change.
-- Treat `test_export_fixture_library_writes_expected_files_and_digikam_xmp_fields` as the minimum required gate before deleting CLI commands, model fields, or metadata mappings.
-- Prefer deleting code only after the exporter golden test proves the migration workflow still emits the expected files and DigiKam-facing sidecars.
-- If behavior must intentionally change, update the fixture notes in `testdata/README.md` and the golden assertions in `src/bin/dumper/exporter.rs` in the same change.
+- Progress bars use `pbr` and write to stderr during cache materialization.
+- The exporter handles missing source files with warnings instead of crashing the full run.
+- SQLite access in the Rust library remains available as a fallback when plist files are missing.
+- Some repository files under `extras/` are intentionally local-only and may be ignored because they can contain workstation- or environment-specific information.
 
-### Caching System
+## File Map
 
-The export binary implements a JSON-based caching system in `main.rs`:
-- Cache file location: `/tmp/aplib_cache_<hash>.bin` (hash based on library path)
-- Caches: Version and Master objects
-- **Important**: Cache assumes library is read-only (not being actively modified)
-- First run may take 40+ minutes on large network-mounted libraries; subsequent runs use cache
-
-### XMP Metadata
-
-The `xmp.rs` module provides the `ToXmp` trait for converting Aperture metadata to XMP format. Custom namespace `aplib:` is used for Aperture-specific fields like:
-- Face detection regions
-- Stack membership
-- Adjustment settings
-- Original Aperture UUIDs
-
-## Important Implementation Details
-
-- Progress bars use `pbr` crate and stderr
-- Versions directory scanning is slow on large libraries - uses progress bar
-- **Keywords** are resolved from UUID references to human-readable names during export:
-  - UUIDs are looked up in the keyword map
-  - Non-UUID strings are treated as direct names (iPhoto imports)
-  - Multi-space delimiters (2+ consecutive spaces) split hierarchical keywords
-  - Example: "Wedding  Stock Category" becomes two keywords: "Wedding" and "Stock Category"
-  - All keywords are sanitized to remove null bytes and illegal XML characters before XMP export
-- **Version file paths**: The `Version.source_directory` field captures the plist location in `Database/Versions/`, 
-  but must be transformed to `Masters/` tree to find actual image files (see `transform_versions_to_masters_path()` in exporter.rs)
-- The code handles missing/corrupted files gracefully with warnings
-- The SQLite database is only accessed as a fallback when plist files are missing
-
-## File Organization
-
-- `src/lib.rs` - Core traits and type definitions
-- `src/library.rs` - Main Library struct with loading logic
-- `src/bin/dumper/main.rs` - CLI entry point and cache management
-- `src/bin/dumper/exporter.rs` - Export functionality
-- `src/{master,version,volume,keyword}.rs` - Individual object types still used by the live migration path
-- `src/xmp.rs` - XMP metadata generation and sanitization utilities
-- `src/audit.rs` - Auditing/validation framework
-- `testdata/` - Synthetic Aperture fixtures, including the golden migration test bundle
+- `src/lib.rs`: core traits and type definitions
+- `src/library.rs`: main library loading logic and layout handling
+- `src/master.rs`: master parsing and XMP serialization
+- `src/version.rs`: version parsing and XMP serialization
+- `src/keyword.rs`: keyword loading and UUID-to-name resolution
+- `src/xmp.rs`: XMP helpers, namespace registration, and keyword interop writers
+- `src/bin/dumper/main.rs`: CLI entry point and cache management
+- `src/bin/dumper/exporter.rs`: export job construction, file copying, sidecar writing, checkpoint logging, and tests
+- `extras/digikam-group-utility/`: DigiKam DB grouping helper
+- `extras/fix-image-uuid/`: XMP `ImageUniqueID` backfill helper
+- `testdata/`: synthetic Aperture fixture library and related notes
 
 ## External Dependencies
 
-- **exempi2** - XMP metadata manipulation (requires `libexempi-dev`)
-- **rusqlite** - SQLite database access (requires `libsqlite3-dev`)
-- **plist** - Apple property list parsing
-- **clap** - CLI argument parsing
-- **serde/serde_json** - Cache serialization
+- `exempi2`: XMP metadata manipulation, requires `libexempi-dev`
+- `rusqlite`: SQLite access, requires `libsqlite3-dev`
+- `plist`: Apple property list parsing
+- `clap`: CLI argument parsing for the export binary
+- `pbr`: progress bar output for cache materialization
+- `serde` / `serde_json`: cache serialization
+- `mysql-connector-python`: required by `extras/digikam-group-utility`
