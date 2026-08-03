@@ -1,25 +1,24 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from fix_image_uuid import process_sidecar, _has_image_unique_id
+import exiftool
+from fix_image_uuid import (
+    _select_unique_id,
+    _read_xmp_fields,
+    _write_image_unique_id,
+    _decide_action,
+)
 
+requires_exiftool = pytest.mark.skipif(
+    not exiftool.ExifTool.executable,
+    reason="exiftool not installed",
+)
 
-def test_has_image_unique_id_detects_marker(tmp_path: Path) -> None:
-    sidecar = tmp_path / "has.xmp"
-    sidecar.write_text('<rdf:Description digiKam:ImageUniqueID="abc"/>', encoding="utf-8")
-    assert _has_image_unique_id(sidecar) is True
-
-    empty = tmp_path / "no.xmp"
-    empty.write_text("<rdf:Description/>", encoding="utf-8")
-    assert _has_image_unique_id(empty) is False
-
-
-def test_process_sidecar_preserves_xpacket_header_when_inserting_uuid(tmp_path: Path) -> None:
-    sidecar = tmp_path / "sample.xmp"
-    sidecar.write_text(
-        """<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+SAMPLE_XMP = """<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/">
  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
   <rdf:Description rdf:about=""
@@ -30,45 +29,62 @@ def test_process_sidecar_preserves_xpacket_header_when_inserting_uuid(tmp_path: 
  </rdf:RDF>
 </x:xmpmeta>
 <?xpacket end="w"?>
-""",
-        encoding="utf-8",
+"""
+
+
+@requires_exiftool
+def test_select_unique_id_precedence() -> None:
+    # VersionUUID wins
+    value, source = _select_unique_id(
+        {"VersionUUID": "v1", "OriginalVersionUUID": "o1", "MasterUUID": "m1"}
     )
+    assert (value, source) == ("v1", "xmp:VersionUUID")
 
-    status, source = process_sidecar(sidecar, dry_run=False, verbose=False, rewrite_all=False)
+    # OriginalVersionUUID next
+    value, source = _select_unique_id({"OriginalVersionUUID": "o1", "MasterUUID": "m1"})
+    assert (value, source) == ("o1", "aplib:OriginalVersionUUID")
 
-    assert status == "updated"
+    # MasterUUID next
+    value, source = _select_unique_id({"MasterUUID": "m1"})
+    assert (value, source) == ("m1", "aplib:MasterUUID")
+
+    # Generated fallback
+    value, source = _select_unique_id({})
+    assert source == "generated:uuid4"
+    assert len(value) == 36
+
+
+def test_decide_action_no_uuid_adds() -> None:
+    action, value, source = _decide_action({"VersionUUID": "v1"}, rewrite_all=False)
+    assert action == "add-uuid"
+    assert value == "v1"
     assert source == "xmp:VersionUUID"
 
-    output = sidecar.read_text(encoding="utf-8")
-    assert output.startswith('<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>')
-    assert "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">" in output
-    assert 'digiKam:ImageUniqueID="12345678-1234-1234-1234-1234567890ab"' in output
+
+def test_decide_action_has_uuid_no_rewrite_no_change() -> None:
+    action, value, source = _decide_action({"ImageUniqueID": "existing"}, rewrite_all=False)
+    assert action is None
+    assert value is None
+    assert source is None
 
 
-def test_process_sidecar_repair_all_restores_xpacket_wrapper(tmp_path: Path) -> None:
-    sidecar = tmp_path / "broken.xmp"
-    sidecar.write_text(
-        """<?xml version='1.0' encoding='utf-8'?>
-<ns0:xmpmeta xmlns:ns0="adobe:ns:meta/">
- <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-  <rdf:Description rdf:about=""
-    xmlns:digiKam="http://www.digikam.org/ns/1.0/"
-    digiKam:ImageUniqueID="existing-uuid">
-  </rdf:Description>
- </rdf:RDF>
-</ns0:xmpmeta>
-""",
-        encoding="utf-8",
-    )
+def test_decide_action_has_uuid_rewrite_all_rewrites_packet() -> None:
+    action, value, source = _decide_action({"ImageUniqueID": "existing"}, rewrite_all=True)
+    assert action == "rewrite-packet"
+    assert value is None
+    assert source is None
 
-    status, source = process_sidecar(sidecar, dry_run=False, verbose=False, rewrite_all=True)
 
-    assert status == "updated"
-    assert source == "rewrite:repair-envelope"
+@requires_exiftool
+def test_read_and_write_roundtrip(tmp_path: Path) -> None:
+    sidecar = tmp_path / "sample.xmp"
+    sidecar.write_text(SAMPLE_XMP, encoding="utf-8")
 
-    output = sidecar.read_text(encoding="utf-8")
-    assert output.startswith('<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>')
-    assert output.rstrip().endswith('<?xpacket end="w"?>')
-    assert "<?xml version='1.0' encoding='utf-8'?>" not in output
-    assert '<x:xmpmeta xmlns:x="adobe:ns:meta/">' in output
-    assert 'ns0:xmpmeta' not in output
+    with exiftool.ExifTool() as et:
+        # Write a UUID
+        assert _write_image_unique_id(et, sidecar, "test-uuid-123")
+
+        # Read it back
+        fields = _read_xmp_fields(et, [sidecar])[0]
+        assert fields["ImageUniqueID"] == "test-uuid-123"
+        assert fields["VersionUUID"] == "12345678-1234-1234-1234-1234567890ab"
