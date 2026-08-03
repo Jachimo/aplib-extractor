@@ -80,7 +80,9 @@ def resolve_image_id(cursor, full_image_path: str) -> int | None:
 def resolve_image_id_with_reason(
     cursor,
     full_image_path: str,
+    digikam_image_unique_id: str | None = None,
     alternate_filenames: list[str] | None = None,
+    global_size_cache: dict[int, tuple[int | None, str]] | None = None,
 ) -> tuple[int | None, str]:
     """Resolve filesystem path to DigiKam Images.id.
 
@@ -88,6 +90,22 @@ def resolve_image_id_with_reason(
     trailing/leading slash differences do not break matching.
     """
     directory, filename = os.path.split(os.path.normpath(full_image_path))
+
+    uuid_rows: list[int] = []
+    if digikam_image_unique_id:
+        cursor.execute(
+            """
+            SELECT imageid
+            FROM ImageHistory
+            INNER JOIN Images ON imageid=id
+            WHERE uuid=%s AND status<3
+            LIMIT 3
+            """,
+            (digikam_image_unique_id,),
+        )
+        uuid_rows = [int(row[0]) for row in cursor.fetchall()]
+        if len(uuid_rows) == 1:
+            return uuid_rows[0], "history_uuid_match"
 
     query = """
         SELECT i.id, r.specificPath, a.relativePath, r.identifier, i.fileSize
@@ -100,6 +118,28 @@ def resolve_image_id_with_reason(
 
     cursor.execute(query, (query_name,))
     rows = cursor.fetchall()
+
+    try:
+        exported_size = os.path.getsize(full_image_path)
+    except OSError:
+        exported_size = None
+
+    def _resolve_unique_global_size(file_size: int) -> tuple[int | None, str]:
+        if global_size_cache is not None and file_size in global_size_cache:
+            return global_size_cache[file_size]
+
+        cursor.execute("SELECT id FROM Images WHERE fileSize=%s LIMIT 3", (file_size,))
+        matches = [int(row[0]) for row in cursor.fetchall()]
+        if len(matches) == 1:
+            result = (matches[0], "global_size_match")
+        elif len(matches) > 1:
+            result = (None, "global_size_ambiguous")
+        else:
+            result = (None, "global_size_missing")
+
+        if global_size_cache is not None:
+            global_size_cache[file_size] = result
+        return result
 
     if not rows and alternate_filenames:
         seen = {filename.lower()}
@@ -120,6 +160,12 @@ def resolve_image_id_with_reason(
                 break
 
     if not rows:
+        if exported_size is not None:
+            image_id, reason = _resolve_unique_global_size(exported_size)
+            if image_id is not None:
+                return image_id, reason
+        if digikam_image_unique_id and len(uuid_rows) > 1:
+            return None, "history_uuid_ambiguous"
         return None, "no_name_match"
 
     def _identifier_paths(identifier: str | None) -> list[str]:
@@ -171,11 +217,6 @@ def resolve_image_id_with_reason(
 
     # Fallback: if export location differs from DigiKam album roots, match by
     # filename + file size within same-name candidates.
-    try:
-        exported_size = os.path.getsize(full_image_path)
-    except OSError:
-        exported_size = None
-
     if exported_size is not None:
         size_matches = [
             int(image_id)
@@ -196,6 +237,13 @@ def resolve_image_id_with_reason(
                 size_matches,
             )
             return None, "size_ambiguous"
+
+    if exported_size is not None:
+        image_id, reason = _resolve_unique_global_size(exported_size)
+        if image_id is not None:
+            if query_name != filename:
+                return image_id, "global_size_match_alt_name"
+            return image_id, reason
 
     if query_name != filename:
         return None, "dir_mismatch_alt_name"

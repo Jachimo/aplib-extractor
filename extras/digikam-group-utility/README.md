@@ -61,6 +61,7 @@ This is intentional so long runs do not appear stuck.
 - Resolves image IDs via `Images` + `Albums` + `AlbumRoots` path matching.
 - Falls back to sidecar-derived filename hints (`xmp:VersionFileName`, `aplib:MasterFilename`, `tiff:FileName`) when exported filenames differ from DigiKam-imported filenames.
 - Falls back to same-name + file-size matching when path roots differ.
+- Falls back to global unique file-size matching when filename-based matching fails entirely.
 - Plans and applies `ImageRelations(subject=member, object=leader, type=2)`.
 
 ## Resolver diagnostics
@@ -70,4 +71,5 @@ Planning logs include unresolved-path reason counters so mismatches can be diagn
 - `no_name_match`: filename not found in DigiKam `Images.name`.
 - `dir_mismatch`: filename found, but album-root/relative-path mapping did not match the exported directory.
 - `size_ambiguous`: fallback by filename+size found multiple candidates.
+- `global_size_ambiguous`: global filesize fallback found multiple DB candidates.
 - `*_alt_name`: result came from sidecar filename fallback rather than exported filename.

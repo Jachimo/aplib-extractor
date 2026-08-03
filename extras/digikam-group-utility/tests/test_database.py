@@ -1,9 +1,10 @@
 from pathlib import Path
 import sys
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from database import create_group
+from database import create_group, resolve_image_id_with_reason
 
 
 class FakeCursor:
@@ -69,3 +70,68 @@ def test_create_group_rejects_leader_as_member():
         assert False, "expected ValueError"
     except ValueError as exc:
         assert "Leader image cannot also be a member" in str(exc)
+
+
+class FakeResolveCursor:
+    def __init__(self, size_rows):
+        self._size_rows = size_rows
+        self._fetchall = []
+        self._uuid_rows = []
+
+    def set_uuid_rows(self, rows):
+        self._uuid_rows = rows
+
+    def execute(self, query, params):
+        if "FROM ImageHistory" in query and "WHERE uuid=%s" in query:
+            self._fetchall = self._uuid_rows
+        elif "WHERE i.name = %s" in query:
+            self._fetchall = []
+        elif "WHERE fileSize=%s" in query:
+            self._fetchall = self._size_rows
+        else:
+            self._fetchall = []
+
+    def fetchall(self):
+        return self._fetchall
+
+
+@patch("database.os.path.getsize", return_value=1234)
+def test_resolve_image_id_with_reason_global_size_unique(_mock_getsize):
+    cur = FakeResolveCursor(size_rows=[(42,)])
+    image_id, reason = resolve_image_id_with_reason(cur, "/tmp/missing-name.jpg")
+    assert image_id == 42
+    assert reason == "global_size_match"
+
+
+@patch("database.os.path.getsize", return_value=1234)
+def test_resolve_image_id_with_reason_global_size_ambiguous(_mock_getsize):
+    cur = FakeResolveCursor(size_rows=[(42,), (43,), (44,)])
+    image_id, reason = resolve_image_id_with_reason(cur, "/tmp/missing-name.jpg")
+    assert image_id is None
+    assert reason == "no_name_match"
+
+
+@patch("database.os.path.getsize", return_value=1234)
+def test_resolve_image_id_with_reason_history_uuid_unique(_mock_getsize):
+    cur = FakeResolveCursor(size_rows=[])
+    cur.set_uuid_rows([(99,)])
+    image_id, reason = resolve_image_id_with_reason(
+        cur,
+        "/tmp/missing-name.jpg",
+        digikam_image_unique_id="uuid-1",
+    )
+    assert image_id == 99
+    assert reason == "history_uuid_match"
+
+
+@patch("database.os.path.getsize", return_value=1234)
+def test_resolve_image_id_with_reason_history_uuid_ambiguous(_mock_getsize):
+    cur = FakeResolveCursor(size_rows=[])
+    cur.set_uuid_rows([(99,), (100,), (101,)])
+    image_id, reason = resolve_image_id_with_reason(
+        cur,
+        "/tmp/missing-name.jpg",
+        digikam_image_unique_id="uuid-1",
+    )
+    assert image_id is None
+    assert reason == "history_uuid_ambiguous"

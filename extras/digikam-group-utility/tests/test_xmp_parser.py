@@ -3,7 +3,11 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from xmp_parser import extract_candidate_filenames, extract_master_uuid
+from xmp_parser import (
+  extract_candidate_filenames,
+  extract_digikam_image_unique_id,
+  extract_master_uuid,
+)
 
 
 def test_extract_master_uuid_from_element_text(tmp_path):
@@ -94,3 +98,30 @@ def test_extract_candidate_filenames_parses_beyond_head_limit(tmp_path):
 
     names = extract_candidate_filenames(str(xmp))
     assert names == {"DEEP_0001.JPG"}
+
+
+def test_extract_digikam_image_unique_id_from_element(tmp_path):
+    xmp = tmp_path / "photo.jpg.xmp"
+    xmp.write_text(
+        """<?xml version='1.0'?>
+<x:xmpmeta xmlns:x='adobe:ns:meta/'
+           xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+           xmlns:digiKam='http://www.digikam.org/ns/1.0/'>
+  <rdf:RDF>
+    <rdf:Description>
+      <digiKam:ImageUniqueID>digikam-uuid-123</digiKam:ImageUniqueID>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>
+""",
+        encoding="utf-8",
+    )
+
+    assert extract_digikam_image_unique_id(str(xmp)) == "digikam-uuid-123"
+
+
+def test_extract_digikam_image_unique_id_missing_field(tmp_path):
+    xmp = tmp_path / "photo.jpg.xmp"
+    xmp.write_text("<root />", encoding="utf-8")
+
+    assert extract_digikam_image_unique_id(str(xmp)) is None

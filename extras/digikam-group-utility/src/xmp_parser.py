@@ -6,6 +6,12 @@ logger = logging.getLogger(__name__)
 
 MASTER_UUID_ELEMENT_RE = re.compile(r"<aplib:MasterUUID>\s*([^<\s][^<]*)\s*</aplib:MasterUUID>")
 MASTER_UUID_ATTR_RE = re.compile(r"aplib:MasterUUID=\"([^\"]+)\"|aplib:MasterUUID='([^']+)'")
+DIGIKAM_IMAGE_UNIQUE_ID_ELEMENT_RE = re.compile(
+    r"<digiKam:ImageUniqueID>\s*([^<\s][^<]*)\s*</digiKam:ImageUniqueID>"
+)
+DIGIKAM_IMAGE_UNIQUE_ID_ATTR_RE = re.compile(
+    r"digiKam:ImageUniqueID=\"([^\"]+)\"|digiKam:ImageUniqueID='([^']+)'"
+)
 VERSION_FILENAME_ELEMENT_RE = re.compile(
     r"<(?:xmp:)?VersionFileName>\s*([^<\s][^<]*)\s*</(?:xmp:)?VersionFileName>"
 )
@@ -14,6 +20,7 @@ TIFF_FILENAME_ELEMENT_RE = re.compile(r"<tiff:FileName>\s*([^<\s][^<]*)\s*</tiff
 
 NAMESPACES = {
     "aplib": "http://github.com/Jachimo/aplib-extractor/aplib/1.0/",
+    "digiKam": "http://www.digikam.org/ns/1.0/",
     "xmp": "http://ns.adobe.com/xap/1.0/",
     "tiff": "http://ns.adobe.com/tiff/1.0/",
     "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
@@ -122,3 +129,49 @@ def extract_candidate_filenames(xmp_file_path: str) -> set[str]:
     except OSError:
         logger.warning("Failed reading sidecar: %s", xmp_file_path)
         return set()
+
+
+def extract_digikam_image_unique_id(xmp_file_path: str) -> str | None:
+    """Extract digiKam image UUID from an XMP sidecar file.
+
+    Returns None if the field is missing or if the file cannot be read/parsed.
+    """
+    try:
+        head = _read_head(xmp_file_path)
+
+        element_match = DIGIKAM_IMAGE_UNIQUE_ID_ELEMENT_RE.search(head)
+        if element_match:
+            value = element_match.group(1).strip()
+            if value:
+                return value
+
+        attr_match = DIGIKAM_IMAGE_UNIQUE_ID_ATTR_RE.search(head)
+        if attr_match:
+            value = (attr_match.group(1) or attr_match.group(2) or "").strip()
+            if value:
+                return value
+
+        tree = ET.parse(xmp_file_path)
+        root = tree.getroot()
+
+        image_unique_id_tag = "{" + NAMESPACES["digiKam"] + "}ImageUniqueID"
+        elem = root.find(".//" + image_unique_id_tag)
+        if elem is not None and elem.text:
+            value = elem.text.strip()
+            if value:
+                return value
+
+        # Backward-compat fallback for odd files that encode it as an attribute.
+        image_unique_id_attr = "{" + NAMESPACES["digiKam"] + "}ImageUniqueID"
+        for elem in root.iter():
+            if image_unique_id_attr in elem.attrib:
+                value = elem.attrib[image_unique_id_attr].strip()
+                return value if value else None
+
+        return None
+    except ET.ParseError:
+        logger.warning("Invalid XML in sidecar: %s", xmp_file_path)
+        return None
+    except OSError:
+        logger.warning("Failed reading sidecar: %s", xmp_file_path)
+        return None

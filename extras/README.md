@@ -2,6 +2,21 @@
 
 This directory contains optional helper utilities that are not part of the core export binary.
 
+## digiKam Image UUID Backfill
+
+Script: [extras/fix-image-uuid/fix_image_uuid.py](extras/fix-image-uuid/fix_image_uuid.py)
+
+Use this script to backfill `digiKam:ImageUniqueID` into existing exported XMP sidecars without re-running a full export.
+
+Basic run:
+
+```shell
+python3 extras/fix-image-uuid/fix_image_uuid.py /path/to/export --dry-run
+python3 extras/fix-image-uuid/fix_image_uuid.py /path/to/export
+```
+
+The script preserves existing IDs and uses Aperture-derived UUIDs when available.
+
 ## NAS Diagnostics Helper
 
 Script: [extras/nas_diagnose.sh](extras/nas_diagnose.sh)

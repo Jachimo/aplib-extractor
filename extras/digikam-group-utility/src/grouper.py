@@ -5,7 +5,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from database import create_group_safe, resolve_image_id_with_reason
-from xmp_parser import extract_candidate_filenames, extract_master_uuid
+from xmp_parser import (
+    extract_candidate_filenames,
+    extract_digikam_image_unique_id,
+    extract_master_uuid,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +145,11 @@ def plan_groups_by_master_uuid(
     unresolved_warnings_shown = 0
     unresolved_by_reason: dict[str, int] = {}
     sidecar_name_rescues = 0
+    global_size_rescues = 0
+    history_uuid_rescues = 0
     sidecar_name_cache: dict[str, list[str]] = {}
+    sidecar_digikam_uuid_cache: dict[str, str | None] = {}
+    global_size_cache: dict[int, tuple[int | None, str]] = {}
 
     cursor = conn.cursor()
     try:
@@ -167,7 +175,21 @@ def plan_groups_by_master_uuid(
 
             resolved: list[tuple[int, str]] = []
             for image_path in image_paths:
-                image_id, reason = resolve_image_id_with_reason(cursor, image_path)
+                digikam_image_unique_id = sidecar_digikam_uuid_cache.get(image_path)
+                if image_path not in sidecar_digikam_uuid_cache:
+                    digikam_image_unique_id = None
+                    for candidate in _possible_sidecars(Path(image_path)):
+                        if candidate.exists():
+                            digikam_image_unique_id = extract_digikam_image_unique_id(str(candidate))
+                            break
+                    sidecar_digikam_uuid_cache[image_path] = digikam_image_unique_id
+
+                image_id, reason = resolve_image_id_with_reason(
+                    cursor,
+                    image_path,
+                    digikam_image_unique_id=digikam_image_unique_id,
+                    global_size_cache=global_size_cache,
+                )
                 if image_id is None and reason == "no_name_match":
                     sidecar_candidates = sidecar_name_cache.get(image_path)
                     if sidecar_candidates is None:
@@ -185,11 +207,17 @@ def plan_groups_by_master_uuid(
                             cursor,
                             image_path,
                             alternate_filenames=sidecar_candidates,
+                            global_size_cache=global_size_cache,
                         )
                         if retry_image_id is not None:
                             image_id = retry_image_id
                             reason = retry_reason
                             sidecar_name_rescues += 1
+
+                if image_id is not None and reason.startswith("global_size_match"):
+                    global_size_rescues += 1
+                if image_id is not None and reason == "history_uuid_match":
+                    history_uuid_rescues += 1
 
                 if image_id is None:
                     unresolved_paths += 1
@@ -241,6 +269,8 @@ def plan_groups_by_master_uuid(
             )
             logger.info("Unresolved path reasons: %s", reason_summary)
         logger.info("Resolved via sidecar filename fallback: %d", sidecar_name_rescues)
+        logger.info("Resolved via global unique filesize fallback: %d", global_size_rescues)
+        logger.info("Resolved via digiKam ImageUniqueID fallback: %d", history_uuid_rescues)
         if total_master_uuid > 0 and stats.db_resolved_images == 0:
             logger.warning(
                 "Resolved 0 images from %d MasterUUID groups. This usually means exported file paths do not map to DigiKam album roots in the current DB. "
