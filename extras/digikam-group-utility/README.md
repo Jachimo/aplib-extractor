@@ -64,6 +64,18 @@ This is intentional so long runs do not appear stuck.
 - Falls back to global unique file-size matching when filename-based matching fails entirely.
 - Plans and applies `ImageRelations(subject=member, object=leader, type=2)`.
 
+## Sidecar parsing limitation
+
+Sidecars are parsed with a fast regex scan of only the first 64 KiB of each
+file (see `src/xmp_parser.py`). Fields located deeper than that limit are not
+found. In practice the exporter writes `aplib:MasterUUID` and the filename
+hints near the top of the file, so this matches the expected output, but it is
+a deliberate trade-off to avoid full XML parsing on large export trees.
+
+Note that this is a read-only, best-effort scan: if a sidecar's fields are
+missed, the image is simply skipped (logged as unresolved) rather than
+corrupted.
+
 ## Resolver diagnostics
 
 Planning logs include unresolved-path reason counters so mismatches can be diagnosed quickly:
