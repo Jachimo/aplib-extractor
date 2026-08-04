@@ -13,7 +13,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Group DigiKam images by shared XMP aplib:MasterUUID"
     )
-    parser.add_argument("export_dir", help="Path to exported images and XMP sidecars")
+    parser.add_argument(
+        "export_dir",
+        nargs="?",
+        help="Path to exported images and XMP sidecars (not needed with --backup-only)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Plan groups without writing DB")
     parser.add_argument("--backup", action="store_true", help="Create DB backup before changes")
     parser.add_argument("--backup-only", action="store_true", help="Create backup and exit")
@@ -23,7 +27,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--db-name", help="Database name (overrides DIGIKAM_DB_NAME)")
     parser.add_argument("--db-user", help="Database user (overrides DIGIKAM_DB_USER)")
     parser.add_argument("--db-password", help="Database password (overrides DIGIKAM_DB_PASSWORD)")
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    if not args.backup_only and not args.export_dir:
+        parser.error("export_dir is required unless --backup-only is used")
+
+    return args
 
 
 def main() -> int:

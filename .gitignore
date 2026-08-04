@@ -15,4 +15,5 @@ extras/*.log
 extras/*.out
 extras/**/*.log
 extras/**/*.out
-extras/digikam-group-utility/verification-output.txt
+extras/digikam-group-utility/*-output.txt
+extras/digikam-group-utility/backups/*

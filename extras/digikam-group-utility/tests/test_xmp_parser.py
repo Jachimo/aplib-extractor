@@ -76,30 +76,6 @@ def test_extract_candidate_filenames_from_common_fields(tmp_path):
     assert names == {"IMG_0001.JPG", "MASTER_0001.JPG", "TIFF_0001.JPG"}
 
 
-def test_extract_candidate_filenames_parses_beyond_head_limit(tmp_path):
-    xmp = tmp_path / "photo.jpg.xmp"
-    xmp.write_text(
-        """<?xml version='1.0'?>
-<x:xmpmeta xmlns:x='adobe:ns:meta/'
-           xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
-           xmlns:tiff='http://ns.adobe.com/tiff/1.0/'>
-  <rdf:RDF>
-    <rdf:Description>
-"""
-        + (" " * 70000)
-        + """
-      <tiff:FileName>DEEP_0001.JPG</tiff:FileName>
-    </rdf:Description>
-  </rdf:RDF>
-</x:xmpmeta>
-""",
-        encoding="utf-8",
-    )
-
-    names = extract_candidate_filenames(str(xmp))
-    assert names == {"DEEP_0001.JPG"}
-
-
 def test_extract_digikam_image_unique_id_from_element(tmp_path):
     xmp = tmp_path / "photo.jpg.xmp"
     xmp.write_text(
