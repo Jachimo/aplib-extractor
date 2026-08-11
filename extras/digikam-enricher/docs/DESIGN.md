@@ -41,12 +41,87 @@ Every version (including the original) has its own `.apversion` plist file conta
 - Version-specific metadata: rating, keywords, flagged status, color label, IPTC/EXIF
   properties, custom info, adjustment history, etc.
 
-The exporter writes these identities into XMP:
-- Master sidecars include: `aplib:MasterUUID`, `aplib:OriginalVersionUUID`
-- Version sidecars include: `aplib:MasterUUID` AND `xmp:VersionUUID` (= version UUID)
-- All sidecars include: `digiKam:ImageUniqueID`
+### 1.2 What the Exporter Writes to XMP
 
-### 1.2 Matching Strategy
+The exporter writes these identity fields into XMP sidecars:
+
+**Master sidecars** (`.xmp` next to the master image file):
+- `aplib:MasterUUID` — the master UUID
+- `aplib:OriginalVersionUUID` — UUID of the original version (Version-0)
+- `digiKam:ImageUniqueID` — set to `OriginalVersionUUID` (fallback: `MasterUUID`)
+- `tiff:FileName` — master filename
+- `xmp:Title` — master display name
+- `dc:title` (lang-alt) — master display name
+- `photoshop:Headline` — master display name
+- `xmp:CreateDate` — creation timestamp (RFC3339)
+- `photoshop:DateCreated` — creation timestamp (RFC3339)
+- `xmp:ImageDate` — image capture date (RFC3339)
+- `exif:DateTimeOriginal` — image capture date (RFC3339)
+- `xmp:FileCreateDate` — file creation date (RFC3339)
+- `xmp:FileModifyDate` — file modification date (RFC3339)
+- `tiff:OriginalFileName` — original filename
+- `aplib:ModelID` — Aperture model ID
+- `aplib:ProjectUUID` — project UUID
+- `aplib:AlternateMaster` — alternate master UUID (RAW+JPEG pairs)
+- `aplib:ImportGroupUUID` — import group UUID
+- `aplib:DBVersion` — database version
+- `aplib:Type` — master type
+- `aplib:Subtype` — master subtype
+- `aplib:ImagePath` — original image path
+- `aplib:IsReference` — whether referenced (not managed)
+- `aplib:IsTrulyRaw` — whether RAW file
+- `aplib:IsInTrash` — whether in trash
+- `aplib:IsMissing` — whether file is missing
+- `aplib:IsExternallyEditable` — whether externally editable
+- `aplib:FileSize` — file size in bytes
+- `aplib:FileVolumeUUID` — volume UUID
+- `aplib:ColorSpaceName` — color space name
+- `aplib:PixelFormat` — pixel format code
+- `aplib:HasFocusPoints` — focus point count
+- `aplib:ImageFormat` — image format code
+- `aplib:FaceDetectionState` — face detection status
+- `aplib:Notes` — notes (debug format)
+- `aplib:ColorSpaceDefinition` — base64-encoded color space definition
+- `aplib:ApertureLibraryPath` — path to source library
+- Keywords (see §1.4)
+
+**Version sidecars** (`.xmp` next to each version image file):
+- `xmp:VersionUUID` — the version UUID
+- `xmp:VersionFileName` — version export filename
+- `tiff:FileName` — version export filename
+- `digiKam:ImageUniqueID` — set to version UUID (always)
+- `aplib:MasterUUID` — reference to master UUID
+- `aplib:MasterFilename` — reference to master filename
+- `xmp:Rating` — numeric rating (0-5, Aperture scale)
+- `digiKam:PickLabel` — `0` (None) or `2` (Pending), from `is_flagged`
+- `digiKam:ColorLabel` — `0-9`, clamped from `colour_label_index`
+- `xmp:Label` — string label name (Red, Yellow, Green, Blue, Purple)
+- `photoshop:Urgency` — mirrors color label
+- `xmp:CreateDate` — creation timestamp (RFC3339)
+- `photoshop:DateCreated` — creation timestamp (RFC3339)
+- `exif:DateTimeOriginal` — image capture date (RFC3339)
+- `dc:title` (lang-alt) — version display name
+- `photoshop:Headline` — version display name
+- `aplib:VersionNumber` — version number
+- `aplib:DBVersion` — database version
+- `aplib:DBMinorVersion` — database minor version
+- `aplib:IsOriginal` — whether original version
+- `aplib:IsEditable` — whether editable
+- `aplib:IsHidden` — whether hidden
+- `aplib:IsInTrash` — whether in trash
+- `aplib:RawMasterUUID` — raw master UUID
+- `aplib:NonRawMasterUUID` — non-raw master UUID
+- `aplib:TimezoneName` — timezone name
+- `aplib:ExportImageChangeDate` — export image change date
+- `aplib:ExportMetadataChangeDate` — export metadata change date
+- `aplib:ApertureLibraryPath` — path to source library
+- `aplib:CameraTimeZoneName` — camera timezone (from customInfo)
+- `aplib:PictureTimeZoneName` — picture timezone (from customInfo)
+- EXIF fields (mapped via `src/exif.rs`)
+- IPTC fields (mapped via `src/iptc.rs`)
+- Keywords (see §1.4)
+
+### 1.3 Matching Strategy
 
 **We must match at the VERSION level**, not the master level, because:
 - A master may have multiple versions with different metadata (e.g., different ratings,
@@ -54,18 +129,28 @@ The exporter writes these identities into XMP:
 - Metadata we want to enrich (e.g., rating, keywords) is stored per-version in Aperture,
   not per-master
 
-**Match key**: `digiKam:ImageUniqueID` → Aperture object UUID.
+**Primary match key**: `digiKam:ImageUniqueID` → Aperture object UUID.
 
-From the exporter spec:
-- Master sidecars: `digiKam:ImageUniqueID` = `OriginalVersionUUID` (fallback: MasterUUID)
+From the exporter:
+- Master sidecars: `digiKam:ImageUniqueID` = `OriginalVersionUUID` (fallback: `MasterUUID`)
 - Version sidecars: `digiKam:ImageUniqueID` = Version UUID
 
-So `digiKam:ImageUniqueID` in a sidecar directly identifies which Aperture object
-(master or version) it represents.
+**Important subtlety**: A master sidecar's `ImageUniqueID` points to the **original
+version's** `.apversion` file, not the `.apmaster` file. To get master-level metadata
+(like `imagePath`, `colorSpaceName`), you must look up the master via `aplib:MasterUUID`.
 
-As a secondary lookup, we also record the `aplib:MasterUUID` to enable matching by master.
+**Secondary match key**: `aplib:MasterUUID` → master UUID (for master-level fields).
 
-### 1.3 Index Construction
+### 1.4 Keyword Serialization
+
+Keywords are written across 5 namespaces for interoperability:
+- `dc:subject` (rdf:Bag) — flat keywords (leaf names only)
+- `digiKam:TagsList` (rdf:Seq, **ordered**) — hierarchical with `/` separators
+- `MicrosoftPhoto:LastKeywordXMP` (rdf:Bag) — hierarchical with `/` separators
+- `lr:hierarchicalSubject` (rdf:Bag) — hierarchical with `|` separators
+- `mediapro:CatalogSets` (rdf:Bag) — hierarchical with `|` separators
+
+### 1.5 Index Construction
 
 For efficient search across large export trees:
 
@@ -105,7 +190,7 @@ plists and are candidates for enrichment:
 **Version-level fields** (`.apversion`):
 | Aperture Field | Type | Description |
 |---|---|---|
-| `rating` | int (0-5 stars × 2 = 0-10) | User rating |
+| `rating` | int (0-5) | User rating (Aperture star scale) |
 | `isFlagged` | bool | Pick/reject flag |
 | `colourLabelIndex` | int (0-6) | Color label (0=none, 1=Red, 2=Orange, 3=Yellow, 4=Green, 5=Blue, 6=Purple) |
 | `keywords` | array of UUID strings | Keyword UUIDs assigned to this version |
@@ -320,7 +405,7 @@ Examples:
 
 ```
 Available Aperture fields:
-  rating                     int       Version rating (0-10, Aperture scale)
+  rating                     int       Version rating (0-5, Aperture scale)
   isFlagged                  bool      Pick/reject flag
   colourLabelIndex           int       Color label (0-6)
   keywords                   [uuid]    Keyword UUIDs → resolved names
@@ -477,7 +562,7 @@ extras/digikam-enricher/
     ├── test_aperture.py
     ├── test_indexer.py
     ├── test_matcher.py
-    ├── test_xmp_io.py
+    ├── test_xmp_writer.py
     └── test_enricher.py
 ```
 
@@ -525,7 +610,7 @@ Items whose `digiKam:ImageUniqueID` doesn't correspond to any Aperture object:
 - Not an error — the export tree may contain non-Aperture images
 
 ### 8.2 Missing Fields
-If the user requests `--map rating=digiKam:xmpRating` but a specific Aperture
+If the user requests `--map rating=XMP-digiKam:xmpRating` but a specific Aperture
 version has no `rating` field:
 - Logged at DEBUG level
 - Skipped gracefully — no XMP modification for that property on that file
