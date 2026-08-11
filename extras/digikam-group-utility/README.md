@@ -28,13 +28,13 @@ Optional variables:
 
 ```bash
 cd extras/digikam-group-utility
-/home/jtuttle/src/aplib-extractor/.venv/bin/python src/cli.py /path/to/test-export --dry-run --backup
+/path/to/aplib-extractor/.venv/bin/python src/cli.py /path/to/test-export --dry-run --backup
 ```
 
 You can pass DB credentials directly instead of exporting environment variables:
 
 ```bash
-/home/jtuttle/src/aplib-extractor/.venv/bin/python src/cli.py /path/to/test-export \
+/path/to/aplib-extractor/.venv/bin/python src/cli.py /path/to/test-export \
 	--dry-run --verbose \
 	--db-host minion.jwt.zt --db-port 3306 --db-name digikam --db-user digikam --db-password 'YOUR_PASSWORD'
 ```
