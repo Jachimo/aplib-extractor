@@ -299,6 +299,34 @@ exempi2::register_namespace(ns::NS_XMPMETA, "x");
 **Our approach**: Use `PyExifTool` for all XMP writes. ExifTool handles namespace
 registration internally and always writes `x:xmpmeta`.
 
+### 3.2a ExifTool Requires Declared Tags/Namespaces
+
+A second, equally important constraint surfaced during implementation: **ExifTool
+refuses to write XMP tags that are not declared in its tag database**, even when
+the namespace is registered. For example:
+
+```
+$ exiftool -overwrite_original "-XMP-aplib:HasFocusPoints=5" photo.xmp
+Warning: Tag 'XMP-aplib:HasFocusPoints' is not defined
+Nothing to do.
+```
+
+This affects the `aplib:` namespace (and any custom namespace) because ExifTool
+does not ship definitions for it. The exporter's own tags like
+`XMP-digiKam:ImageUniqueID`, `PickLabel`, `ColorLabel`, and `TagsList` *are*
+defined in ExifTool, but arbitrary `aplib:` fields and custom digiKam tags are
+not.
+
+**Solution**: The tool generates a small ExifTool config file (via
+`xmp_config.py`) that declares exactly the namespaces and tag names targeted by
+the current run's `--map` options, then passes it to ExifTool with `-config`.
+The config registers each namespace under `Image::ExifTool::XMP::Main` and
+declares each requested property as a writable string tag. This is deterministic,
+reusable, and keeps the XMP packet format correct.
+
+The generated config is written to `<export-root>/.digikam-enricher.config` and
+is only created in non-dry-run mode (dry-run never touches the filesystem).
+
 ### 3.3 Namespace Design for New Properties
 
 Custom properties will be written under the `aplib:` namespace
@@ -554,15 +582,18 @@ extras/digikam-enricher/
 │       ├── indexer.py       (export tree indexing)
 │       ├── matcher.py       (match export items to Aperture)
 │       ├── xmp_writer.py    (XMP write via PyExifTool)
+│       ├── xmp_config.py    (ExifTool config generation for custom namespaces)
 │       ├── enricher.py      (orchestration)
 │       └── report.py        (report generation)
 └── tests/
     ├── __init__.py
+    ├── conftest.py          (shared testdata paths)
     ├── test_cli.py
     ├── test_aperture.py
     ├── test_indexer.py
     ├── test_matcher.py
     ├── test_xmp_writer.py
+    ├── test_xmp_config.py
     └── test_enricher.py
 ```
 
