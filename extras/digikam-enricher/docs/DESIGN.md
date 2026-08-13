@@ -135,9 +135,22 @@ From the exporter:
 - Master sidecars: `digiKam:ImageUniqueID` = `OriginalVersionUUID` (fallback: `MasterUUID`)
 - Version sidecars: `digiKam:ImageUniqueID` = Version UUID
 
-**Important subtlety**: A master sidecar's `ImageUniqueID` points to the **original
-version's** `.apversion` file, not the `.apmaster` file. To get master-level metadata
-(like `imagePath`, `colorSpaceName`), you must look up the master via `aplib:MasterUUID`.
+**Important subtlety — what a master sidecar's `ImageUniqueID` actually points to.**
+
+A master sidecar's `digiKam:ImageUniqueID` is set to the **original version's UUID**
+(`aplib:OriginalVersionUUID`), *not* the master's own UUID. This matters because it
+determines which Aperture record a lookup by `ImageUniqueID` will find:
+
+- Looking up that ID in the **version index** resolves to the original version's
+  `.apversion` record — i.e. **version-level** metadata (rating, keywords, etc.).
+- It does **not** resolve to the `.apmaster` record, so it gives you **no
+  master-level** metadata (like `imagePath` or `colorSpaceName`).
+
+To get master-level metadata, you must use the sidecar's **`aplib:MasterUUID`** field
+as a separate lookup key into the **master index** (the `.apmaster` records).
+
+In short: `ImageUniqueID` → version-level data; `aplib:MasterUUID` → master-level data.
+The two fields point at different Aperture objects and must not be conflated.
 
 **Secondary match key**: `aplib:MasterUUID` → master UUID (for master-level fields).
 
@@ -249,13 +262,22 @@ work items below are the specification for what needs to be built.
 
 ### 2.4.1 Motivation & Requirements
 
-- An image can appear in **more than one** Aperture album, so the output field
-  must be **multi-valued** (an `rdf:Bag` / `rdf:Seq`).
-- The value should be a **path** through the folder/album tree, e.g.
+- An image can appear in **more than one** Aperture album, so the album output
+  field must be **multi-valued** (an `rdf:Bag` / `rdf:Seq`).
+- Every image belongs to **exactly one** Aperture project, so the project output
+  field is **single-valued** (a plain string).
+- The values should be **paths** through the folder/album tree, e.g.
   `2011/Europe/Flickr`, so the user can reconstruct the image's location in the
   Aperture hierarchy.
 - The data must come from the **plist files** (`Database/Albums/*.apalbum` and
   `Database/Folders/*.apfolder`). **No `Library.apdb` access is required.**
+
+**Two separate fields are written to the sidecar** (see §2.4.6):
+
+| Field | XMP tag | Cardinality | Source |
+|---|---|---|---|
+| `albums` | `aplib:AlbumPath` | multi-valued (`rdf:Bag`) | subclass-3 album `versionUuids` |
+| `project` | `aplib:ProjectPath` | single-valued | `version.projectUuid` → folder path |
 
 ### 2.4.2 Data Source (verified against testdata)
 
@@ -283,6 +305,19 @@ Verified in `testdata/`:
 - `a%TX9lmjQVWvuK9u6RNhGQ.apfolder` — name `2011`,
   `parentFolderUuid=AllProjectsItem`.
 
+**Validated against a real library** (`/mnt/photos/TO IMPORT/Aperture Library.aplibrary`,
+1253 albums, 2681 folders):
+
+| Subclass | Count | Carries `versionUuids`? |
+|---|---|---|
+| 1 | 790 | **No** (all 790 empty) |
+| 2 | 10 | No (smart albums) |
+| 3 | 453 | Yes (447 of 453) |
+
+Folder `folderType` distribution: `{2: 2628, 1: 52, 3: 1}` (type 2 = project,
+type 1 = plain folder). Root sentinels observed: `AllProjectsItem` and
+`PublishedProjects`.
+
 ### 2.4.3 Matching Semantics
 
 Albums reference **version UUIDs** (the `versionUuids` array). This aligns with
@@ -299,9 +334,12 @@ resolves through its original-version UUID to the same index.
 
 | Subclass | Meaning | Contributes paths? |
 |---|---|---|
-| 1 | Folder view | Yes — contributes the folder path itself |
+| 1 | Folder / project view | **No** — validated against a real library: all 790 subclass-1 albums have **no** `versionUuids`. They contribute nothing. |
 | 2 | Smart album | **No** — backed by a query (`UserQueryInfo`), no `versionUuids`; membership cannot be resolved from plists without evaluating the query. Log a warning and skip. |
 | 3 | User album | Yes — contributes `<folder path>/<album name>` for each UUID in `versionUuids` |
+
+**Project membership is handled separately** (see §2.4.9): a version's project is
+resolved from its `projectUuid` field, not from subclass-1 albums.
 
 ### 2.4.5 Path Construction
 
@@ -316,25 +354,45 @@ keyword hierarchical-path convention). Example output value:
 1. **`aperture.py`**
    - Add `album_paths: dict[str, list[str]]` to `ApertureLibrary`, mapping a
      version UUID to the list of album paths containing it.
+   - Add `project_paths: dict[str, str]` to `ApertureLibrary`, mapping a
+     version UUID to its project path (see §2.4.9).
    - Add `load_albums(library_path, library)`:
      - Walk `Database/Albums/*.apalbum` and `Database/Folders/*.apfolder`.
      - Build the `folder_uuid -> name` map and resolve folder paths via the
-       `parentFolderUuid` chain.
+       `parentFolderUuid` chain (stop before the root sentinel; guard against
+       cycles).
      - For each subclass-3 album, append `<folder path>/<album name>` to
        `album_paths[uuid]` for every UUID in `versionUuids`.
-     - For each subclass-1 album, append the folder path itself.
-     - Skip subclass-2 (smart) albums with a warning.
-   - Call `load_albums()` from `load_library()`.
+     - Skip subclass-1 albums (no `versionUuids`) and subclass-2 (smart)
+       albums with a warning.
+   - Add `load_project_paths(library_path, library)`: for each version, resolve
+     its `projectUuid` through the folder tree to a path, storing it in
+     `project_paths[version_uuid]`.
+   - Call `load_albums()` and `load_project_paths()` from `load_library()`.
 
 2. **`matcher.py`**
-   - Add a special `albums` field path in `resolve_field()` that returns
-     `library.album_paths.get(version_uuid)`, using the object's version UUID,
-     or the master's original-version UUID for master sidecars.
-   - Return `None` (→ "missing field") when the image is in no album.
+   - Add special field paths in `resolve_field()`. `resolve_field` receives
+     only the matched `ApertureObject` (`obj`), so derive the version UUID to
+     look up as follows:
+       - If `obj.obj_type == "version"`: use `obj.uuid`.
+       - If `obj.obj_type == "master"`: use
+         `obj.metadata.get("originalVersionUuid")` (the master's original
+         version UUID, matching the master sidecar's `digiKam:ImageUniqueID`).
+         If that key is absent, fall back to `obj.uuid` (the master UUID) —
+         which will simply miss unless the master UUID also appears in an
+         album's `versionUuids`.
+   - `albums` field: return `library.album_paths.get(version_uuid)`; return
+     `None` (→ "missing field") when the image is in no album. Written to
+     `aplib:AlbumPath` as an `rdf:Bag`.
+   - `project` field: return `library.project_paths.get(version_uuid)`; return
+     `None` when the version has no resolvable project path. Written to
+     `aplib:ProjectPath` as a single string.
 
 3. **`cli.py`**
    - Add `("albums", "[path]", "Aperture album/folder paths (multi-valued)")`
      to `AVAILABLE_FIELDS`.
+   - Add `("project", "path", "Aperture project path (single)")` to
+     `AVAILABLE_FIELDS`.
 
 4. **`enricher.py`** — no change required. `_write_value` already routes list
    values through `write_list_property`, which uses ExifTool's `+=` append
@@ -345,10 +403,12 @@ keyword hierarchical-path convention). Example output value:
    auto-declared as a writable string tag.
 
 6. **Tests**
-   - `test_aperture.py`: album index construction from testdata.
-   - `test_matcher.py`: `albums` field resolution (version and master sidecar
-     cases).
-   - `test_enricher.py`: end-to-end — verify `aplib:AlbumPath` bag is written.
+   - `test_aperture.py`: album index and project-path index construction from
+     testdata.
+   - `test_matcher.py`: `albums` and `project` field resolution (version and
+     master sidecar cases).
+   - `test_enricher.py`: end-to-end — verify `aplib:AlbumPath` bag and
+     `aplib:ProjectPath` string are written.
 
 ### 2.4.7 Usage
 
@@ -357,6 +417,7 @@ uv run digikam-enricher \
   --aperture-library ~/Pictures/MyLibrary.aplibrary \
   --export-root /mnt/photos/exported \
   --map albums=XMP-aplib:AlbumPath \
+  --map project=XMP-aplib:ProjectPath \
   --dry-run
 ```
 
@@ -368,6 +429,31 @@ uv run digikam-enricher \
   unique across the tree; two distinct albums may yield the same path string.
 - Only albums that contain a version contribute a path; an image in no album
   yields no `AlbumPath` value.
+- **Project membership** is resolved from `version.projectUuid` (see §2.4.9).
+  A version whose `projectUuid` does not resolve to a known folder yields no
+  `project` path.
+
+### 2.4.9 Project Membership (Resolved)
+
+**Validated against the real library**: subclass-1 albums never carry
+`versionUuids`, so project membership is **not** available from albums. Instead,
+every version plist carries a `projectUuid` field (a folder UUID) — confirmed in
+3000 sampled versions. Project membership is therefore resolved from
+`version.projectUuid`:
+
+1. Read `projectUuid` from each version's `.apversion` plist.
+2. Resolve that folder UUID through the `parentFolderUuid` chain to a path
+   (same path-construction logic as §2.4.5, stopping before the root sentinel).
+3. Store the result in `project_paths[version_uuid]`.
+
+This is a **separate field** from `albums` (user-album membership). An image's
+full Aperture location is the union of:
+
+- `albums` — paths of every subclass-3 user album containing the version, and
+- `project` — the path of the project the version belongs to.
+
+Both are multi-valued-capable (a version can be in several albums; it has one
+project). The `project` field is a single path string.
 
 ---
 
