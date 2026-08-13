@@ -1,12 +1,16 @@
 # Aperture Library Exporter
 
 This is a migration-focused fork of [hfiguiere/aplib-extractor][orig].
-It is designed for one job: exporting an Apple Aperture 3.x library into a
-folder tree that open-source photo managers (primarily [DigiKam][dk]) can import.
+It has one purpose: export an Apple Aperture 3.x library into a
+folder tree that open-source photo managers (primarily [DigiKam][dk]) can import,
+preserving as much of the Aperture metadata as possible.
 
-The software copies master and version images out of an
-`.aplibrary` bundle and writes XMP sidecars that preserve Aperture provenance
-while also mirroring key fields into DigiKam-friendly namespaces.
+The software extracts Master and Version images from an
+Aperture Library (`.aplibrary` bundle), and writes XMP sidecar files
+that provide traceability from Aperture to the future DAM.
+
+It automatically copies key properties into DigiKam-friendly namespaces,
+so the resulting directory tree can be imported and used in DigiKam immediately.
 
 > **Note:** This fork has diverged significantly from upstream. Questions about behavior
 > in this repository should be directed here, not to the upstream maintainer.
@@ -20,7 +24,7 @@ while also mirroring key fields into DigiKam-friendly namespaces.
 - Exports original masters and rendered versions into a normal filesystem
   hierarchy.
 - Writes XMP sidecars for both masters and versions.
-- Preserves Aperture-specific provenance in a custom `aplib:` namespace.
+- Preserves Aperture-specific provenance (in a custom `aplib:` namespace).
 - Mirrors commonly-used fields into DigiKam-consumed XMP fields,
   including titles, dates, ratings, pick/color labels, and keywords/tags.
 - Resolves Aperture keyword UUIDs into readable tag names.
@@ -31,12 +35,12 @@ while also mirroring key fields into DigiKam-friendly namespaces.
 
 ## What This Fork No Longer Does
 
-Some features have been removed from the upstream codebase for ease of 
+Some features have been removed from the codebase for ease of 
 debugging and maintenance: 
 
 - The old subcommand-based CLI is gone.
-- `dump`, `list`, `audit`, and `tree` are not supported top-level commands.
-- The supported entrypoint is `export [OPTIONS] <LIBRARY_PATH>`.
+- `dump`, `list`, `audit`, and `tree` have been removed.
+- The only top-level command is `export [OPTIONS] <LIBRARY_PATH>`.
 
 ## Requirements
 
@@ -83,10 +87,7 @@ cargo run --release --bin export -- \
   ~/Pictures/Aperture\ Library.aplibrary
 ```
 
-## Aperture to DigiKam Quickstart
-
-Migrate an Aperture library to a directory tree that can be directly imported
-by DigiKam, with metadata:
+## Aperture to DigiKam Migration
 
 This assumes you have an Aperture Library at `~/Pictures/MyLibrary.aplibrary`
 and you want to create the DigiKam-compatible export at `~/Migrated/MyLibrary-export`.
@@ -153,7 +154,7 @@ In DigiKam, add `~/Migrated/MyLibrary-export` as a collection root and let the
 initial scan finish.  (Settings menu, Configure DigiKam, Collections, and "Add Collection"
 for the appropriate Local / Removable Media / Network Share type.)
 
-### 6. Run metadata sync from image files into DigiKam database
+### 6. Run metadata sync from images to database
 
 This is the critical final step if you are not seeing tags in DigiKam!
 
@@ -172,13 +173,6 @@ correctly.
 Note that if you run the `aplib-extractor` exporter tool more than once, you will
 need to redo this process to force DigiKam to read the XMP sidecars over again and
 rebuild the database -- otherwise, the values in the database seem to be preferred.
-
-### 7. Verify results
-
-Check one imported image in DigiKam's tags panel:
-
-- Values in `digiKam:TagsList` should appear as hierarchical/nested tags.
-- Values in `dc:subject` should appear as keyword tags.
 
 ## Options
 
