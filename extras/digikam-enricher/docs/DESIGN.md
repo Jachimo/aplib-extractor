@@ -240,6 +240,137 @@ loading is done lazily or with a progress indicator.
 
 ---
 
+## 2.4 Album Structure Enrichment (Planned Feature)
+
+This section describes a planned feature: copying the Aperture **album/folder
+structure** into the exported images' XMP sidecars, so a user can see *where* an
+image appears in the Aperture album tree. This is **not yet implemented** — the
+work items below are the specification for what needs to be built.
+
+### 2.4.1 Motivation & Requirements
+
+- An image can appear in **more than one** Aperture album, so the output field
+  must be **multi-valued** (an `rdf:Bag` / `rdf:Seq`).
+- The value should be a **path** through the folder/album tree, e.g.
+  `2011/Europe/Flickr`, so the user can reconstruct the image's location in the
+  Aperture hierarchy.
+- The data must come from the **plist files** (`Database/Albums/*.apalbum` and
+  `Database/Folders/*.apfolder`). **No `Library.apdb` access is required.**
+
+### 2.4.2 Data Source (verified against testdata)
+
+**`Database/Albums/*.apalbum`** — each album is a plist with:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `InfoDictionary.albumSubclass` | int | `1` = folder view, `2` = smart album, `3` = user album |
+| `InfoDictionary.folderUuid` | string | UUID of the containing folder |
+| `InfoDictionary.name` | string | Album display name |
+| `versionUuids` (top level) | array of string | Version UUIDs contained in the album (**subclass 3 only**) |
+
+**`Database/Folders/*.apfolder`** — each folder is a plist with:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `uuid` | string | Folder UUID |
+| `name` | string | Folder display name |
+| `parentFolderUuid` | string | Parent folder UUID (chain up to the root sentinel, e.g. `AllProjectsItem`) |
+| `implicitAlbumUuid` | string | UUID of the subclass-1 album representing this folder's view |
+
+Verified in `testdata/`:
+- `x6yNun58SB2sImfCarTJHA.apalbum` — subclass 3, name `Flickr`,
+  `versionUuids=['BF6nuoBnTumzoXyexdmXlw']`.
+- `a%TX9lmjQVWvuK9u6RNhGQ.apfolder` — name `2011`,
+  `parentFolderUuid=AllProjectsItem`.
+
+### 2.4.3 Matching Semantics
+
+Albums reference **version UUIDs** (the `versionUuids` array). This aligns with
+the existing identity model:
+
+- Version sidecars carry `digiKam:ImageUniqueID` = version UUID.
+- Master sidecars carry `digiKam:ImageUniqueID` = `aplib:OriginalVersionUUID`
+  (the original version's UUID).
+
+Therefore the reverse index is keyed by **version UUID**, and a master sidecar
+resolves through its original-version UUID to the same index.
+
+### 2.4.4 Album Subclass Handling
+
+| Subclass | Meaning | Contributes paths? |
+|---|---|---|
+| 1 | Folder view | Yes — contributes the folder path itself |
+| 2 | Smart album | **No** — backed by a query (`UserQueryInfo`), no `versionUuids`; membership cannot be resolved from plists without evaluating the query. Log a warning and skip. |
+| 3 | User album | Yes — contributes `<folder path>/<album name>` for each UUID in `versionUuids` |
+
+### 2.4.5 Path Construction
+
+Build a `folder_uuid -> name` map from `Database/Folders/*.apfolder`, then resolve
+each folder's full path by chaining `parentFolderUuid` up to the root sentinel
+(e.g. `AllProjectsItem`). Join components with `/` (mirroring the existing
+keyword hierarchical-path convention). Example output value:
+`2011/Europe/Flickr`.
+
+### 2.4.6 Implementation Work Items
+
+1. **`aperture.py`**
+   - Add `album_paths: dict[str, list[str]]` to `ApertureLibrary`, mapping a
+     version UUID to the list of album paths containing it.
+   - Add `load_albums(library_path, library)`:
+     - Walk `Database/Albums/*.apalbum` and `Database/Folders/*.apfolder`.
+     - Build the `folder_uuid -> name` map and resolve folder paths via the
+       `parentFolderUuid` chain.
+     - For each subclass-3 album, append `<folder path>/<album name>` to
+       `album_paths[uuid]` for every UUID in `versionUuids`.
+     - For each subclass-1 album, append the folder path itself.
+     - Skip subclass-2 (smart) albums with a warning.
+   - Call `load_albums()` from `load_library()`.
+
+2. **`matcher.py`**
+   - Add a special `albums` field path in `resolve_field()` that returns
+     `library.album_paths.get(version_uuid)`, using the object's version UUID,
+     or the master's original-version UUID for master sidecars.
+   - Return `None` (→ "missing field") when the image is in no album.
+
+3. **`cli.py`**
+   - Add `("albums", "[path]", "Aperture album/folder paths (multi-valued)")`
+     to `AVAILABLE_FIELDS`.
+
+4. **`enricher.py`** — no change required. `_write_value` already routes list
+   values through `write_list_property`, which uses ExifTool's `+=` append
+   operator to build an `rdf:Bag`.
+
+5. **`xmp_config.py`** — no change required. The config generator already
+   declares every tag in the `--map` list, so `aplib:AlbumPath` is
+   auto-declared as a writable string tag.
+
+6. **Tests**
+   - `test_aperture.py`: album index construction from testdata.
+   - `test_matcher.py`: `albums` field resolution (version and master sidecar
+     cases).
+   - `test_enricher.py`: end-to-end — verify `aplib:AlbumPath` bag is written.
+
+### 2.4.7 Usage
+
+```bash
+uv run digikam-enricher \
+  --aperture-library ~/Pictures/MyLibrary.aplibrary \
+  --export-root /mnt/photos/exported \
+  --map albums=XMP-aplib:AlbumPath \
+  --dry-run
+```
+
+### 2.4.8 Known Limitations
+
+- **Smart albums (subclass 2)** cannot be resolved from plists without
+  evaluating their query logic; they are skipped.
+- The path is derived from the folder/album **names**, which are not guaranteed
+  unique across the tree; two distinct albums may yield the same path string.
+- Only albums that contain a version contribute a path; an image in no album
+  yields no `AlbumPath` value.
+
+---
+
 ## 3. XMP Output
 
 ### 3.1 Writing to Sidecars
