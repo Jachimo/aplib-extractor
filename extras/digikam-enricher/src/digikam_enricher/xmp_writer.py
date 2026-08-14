@@ -177,16 +177,31 @@ class XmpWriter:
         tag: str,
         values: list,
         stats: WriteStats | None = None,
+        overwrite: bool = False,
     ) -> bool:
         """Append each item in ``values`` to a list-typed XMP tag.
 
         Uses ExifTool's ``+=`` operator so existing bag/seq items are
-        preserved rather than replaced.
+        preserved rather than replaced. When ``overwrite`` is True, the
+        existing tag values are cleared first (via ExifTool's ``-tag=``
+        delete syntax) to avoid duplicates on re-runs.
         """
         if self._et is None:
             raise RuntimeError("XmpWriter not started")
 
         ok = True
+        if overwrite:
+            # Clear existing values first to avoid duplicates.
+            try:
+                self._et.execute(
+                    *[a.encode("utf-8") for a in ["-q", "-q", f"-{tag}=", str(path)]]
+                )
+            except Exception as exc:
+                logger.error("Failed clearing %s in %s: %s", tag, path, exc)
+                ok = False
+                if stats is not None:
+                    stats.errors += 1
+
         for value in values:
             string_value = _serialize_value(value)
             args = ["-q", "-q", f"-{tag}{APPEND_MARKER}{string_value}", str(path)]

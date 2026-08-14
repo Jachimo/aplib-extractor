@@ -107,3 +107,58 @@ def test_resolve_keywords_fallback_uuid():
     obj = _obj("V", "version", None, {"keywords": ["K-MISSING"]})
     result = resolve_field(lib, obj, "keywords")
     assert result == ["uuid:K-MISSING"]
+
+
+def test_resolve_albums_version():
+    lib = ApertureLibrary()
+    lib.album_paths["V-1"] = ["2011/Europe/Flickr"]
+    obj = _obj("V-1", "version", "M-1", {})
+    result = resolve_field(lib, obj, "albums")
+    assert result == ["2011/Europe/Flickr"]
+
+
+def test_resolve_albums_master_via_original_version_uuid():
+    lib = ApertureLibrary()
+    lib.album_paths["V-orig"] = ["2011/Flickr"]
+    # Master sidecar's ImageUniqueID = OriginalVersionUUID = "V-orig"
+    obj = _obj("M-1", "master", None, {"originalVersionUuid": "V-orig"})
+    result = resolve_field(lib, obj, "albums")
+    assert result == ["2011/Flickr"]
+
+
+def test_resolve_albums_master_fallback_to_master_uuid():
+    lib = ApertureLibrary()
+    lib.album_paths["M-1"] = ["2011/Flickr"]
+    obj = _obj("M-1", "master", None, {})
+    result = resolve_field(lib, obj, "albums")
+    assert result == ["2011/Flickr"]
+
+
+def test_resolve_albums_no_match():
+    lib = ApertureLibrary()
+    obj = _obj("V-1", "version", "M-1", {})
+    result = resolve_field(lib, obj, "albums")
+    assert result is None
+
+
+def test_resolve_project_version():
+    lib = ApertureLibrary()
+    lib.project_paths["V-1"] = "2011/Europe"
+    obj = _obj("V-1", "version", "M-1", {})
+    result = resolve_field(lib, obj, "project")
+    assert result == "2011/Europe"
+
+
+def test_resolve_project_master_via_original_version_uuid():
+    lib = ApertureLibrary()
+    lib.project_paths["V-orig"] = "2011"
+    obj = _obj("M-1", "master", None, {"originalVersionUuid": "V-orig"})
+    result = resolve_field(lib, obj, "project")
+    assert result == "2011"
+
+
+def test_resolve_project_no_match():
+    lib = ApertureLibrary()
+    obj = _obj("V-1", "version", "M-1", {})
+    result = resolve_field(lib, obj, "project")
+    assert result is None

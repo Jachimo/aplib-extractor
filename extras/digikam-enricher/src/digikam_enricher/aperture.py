@@ -27,6 +27,8 @@ import plistlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from tqdm import tqdm
+
 logger = logging.getLogger(__name__)
 
 
@@ -64,6 +66,14 @@ class ApertureLibrary:
         Maps keyword UUID to a simple keyword name.
     keywords_path : dict[str, str]
         Maps keyword UUID to a hierarchical ``/``-separated path.
+    album_paths : dict[str, list[str]]
+        Maps a version UUID to the list of album paths (each a ``/``-separated
+        folder path + album name) that contain it, derived from subclass-3
+        user albums.
+    project_paths : dict[str, str]
+        Maps a version UUID to its project path (a ``/``-separated folder
+        path), resolved from the version's ``projectUuid`` through the folder
+        tree.
     """
 
     masters: dict[str, ApertureObject] = field(default_factory=dict)
@@ -71,6 +81,8 @@ class ApertureLibrary:
     version_by_original: dict[str, str] = field(default_factory=dict)
     keywords_flat: dict[str, str] = field(default_factory=dict)
     keywords_path: dict[str, str] = field(default_factory=dict)
+    album_paths: dict[str, list[str]] = field(default_factory=dict)
+    project_paths: dict[str, str] = field(default_factory=dict)
 
 
 def _load_plist(path: Path) -> dict | None:
@@ -132,6 +144,172 @@ def load_keywords(plist_path: Path, library: ApertureLibrary) -> None:
         )
     else:
         logger.warning("No 'keywords' array in %s", plist_path)
+
+
+# Root sentinels that terminate the folder parent-chain walk.
+_ROOT_FOLDER_SENTINELS = {"AllProjectsItem", "PublishedProjects"}
+
+
+def _build_folder_maps(
+    folders_root: Path,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Parse all ``.apfolder`` plists and return two maps.
+
+    Returns ``(folder_name, folder_parent)`` where:
+      - ``folder_name`` maps folder UUID -> display name
+      - ``folder_parent`` maps folder UUID -> parent folder UUID
+    """
+    folder_name: dict[str, str] = {}
+    folder_parent: dict[str, str] = {}
+    if not folders_root.is_dir():
+        return folder_name, folder_parent
+    for f in folders_root.glob("*.apfolder"):
+        data = _load_plist(f)
+        if data is None:
+            continue
+        uuid = data.get("uuid")
+        name = data.get("name")
+        parent = data.get("parentFolderUuid")
+        if isinstance(uuid, str) and isinstance(name, str):
+            folder_name[uuid] = name
+        if isinstance(uuid, str) and isinstance(parent, str):
+            folder_parent[uuid] = parent
+    return folder_name, folder_parent
+
+
+def _resolve_folder_path(
+    folder_uuid: str,
+    folder_name: dict[str, str],
+    folder_parent: dict[str, str],
+) -> str | None:
+    """Resolve a folder UUID to a ``/``-separated path by walking
+    ``parentFolderUuid`` up to a root sentinel.
+
+    Returns ``None`` if the UUID is unknown or the chain is broken.
+    Guards against cycles by tracking visited UUIDs.
+    """
+    if folder_uuid not in folder_name:
+        return None
+    parts: list[str] = []
+    current = folder_uuid
+    visited: set[str] = set()
+    while current is not None and current not in visited:
+        visited.add(current)
+        name = folder_name.get(current)
+        if name is None:
+            break
+        parts.append(name)
+        parent = folder_parent.get(current)
+        if parent is None or parent in _ROOT_FOLDER_SENTINELS:
+            break
+        current = parent
+    if not parts:
+        return None
+    parts.reverse()
+    return "/".join(parts)
+
+
+def load_albums(
+    library_path: Path,
+    library: ApertureLibrary,
+    folder_name: dict[str, str] | None = None,
+    folder_parent: dict[str, str] | None = None,
+) -> None:
+    """Load album and folder structure from the Aperture library.
+
+    Populates ``library.album_paths`` (version UUID -> list of album paths)
+    and ``library.project_paths`` (version UUID -> project path).
+
+    Only subclass-3 user albums contribute ``versionUuids``. Subclass-1
+    (folder view) and subclass-2 (smart) albums are skipped.
+    """
+    database_dir = library_path / "Database"
+    albums_root = database_dir / "Albums"
+
+    if folder_name is None or folder_parent is None:
+        folders_root = database_dir / "Folders"
+        folder_name, folder_parent = _build_folder_maps(folders_root)
+
+    if not albums_root.is_dir():
+        logger.debug("No Albums directory found at %s", albums_root)
+        return
+
+    album_files = sorted(albums_root.glob("*.apalbum"))
+    for f in tqdm(album_files, desc="Loading albums", unit="album"):
+        data = _load_plist(f)
+        if data is None:
+            continue
+        info = data.get("InfoDictionary")
+        if not isinstance(info, dict):
+            continue
+        subclass = info.get("albumSubclass")
+        if subclass != 3:
+            # Subclass 1 = folder view (no versionUuids), subclass 2 = smart
+            # album (query-backed, no versionUuids). Skip both.
+            if subclass == 2:
+                logger.warning(
+                    "Smart album %s skipped (cannot resolve from plists)", f.name
+                )
+            continue
+        version_uuids = data.get("versionUuids")
+        if not isinstance(version_uuids, list):
+            continue
+        album_name = info.get("name")
+        if not isinstance(album_name, str):
+            continue
+        folder_uuid = info.get("folderUuid")
+        folder_path = None
+        if isinstance(folder_uuid, str):
+            folder_path = _resolve_folder_path(
+                folder_uuid, folder_name, folder_parent
+            )
+        if folder_path:
+            album_path = f"{folder_path}/{album_name}"
+        else:
+            album_path = album_name
+        for vuuid in version_uuids:
+            if isinstance(vuuid, str):
+                library.album_paths.setdefault(vuuid, []).append(album_path)
+
+    logger.info(
+        "Loaded album paths for %d versions", len(library.album_paths)
+    )
+
+
+def load_project_paths(
+    library_path: Path,
+    library: ApertureLibrary,
+    folder_name: dict[str, str] | None = None,
+    folder_parent: dict[str, str] | None = None,
+) -> None:
+    """Resolve each version's ``projectUuid`` to a folder path.
+
+    Populates ``library.project_paths`` (version UUID -> project path).
+
+    If ``folder_name`` and ``folder_parent`` are provided (e.g. from a prior
+    call to ``load_albums``), they are reused to avoid re-scanning the
+    Folders directory.
+    """
+    if folder_name is None or folder_parent is None:
+        database_dir = library_path / "Database"
+        folders_root = database_dir / "Folders"
+        folder_name, folder_parent = _build_folder_maps(folders_root)
+
+    for version in tqdm(
+        library.versions.values(), desc="Resolving project paths", unit="ver"
+    ):
+        project_uuid = version.metadata.get("projectUuid")
+        if not isinstance(project_uuid, str):
+            continue
+        path = _resolve_folder_path(
+            project_uuid, folder_name, folder_parent
+        )
+        if path is not None:
+            library.project_paths[version.uuid] = path
+
+    logger.info(
+        "Loaded project paths for %d versions", len(library.project_paths)
+    )
 
 
 def _index_file(
@@ -226,8 +404,10 @@ def load_library(library_path: Path) -> ApertureLibrary:
             load_keywords(alt_keywords, library)
 
     versions_root = database_dir / "Versions"
+    # Count total object dirs for progress bar.
+    obj_dirs = list(_iter_version_dirs(versions_root))
     count = 0
-    for obj_dir in _iter_version_dirs(versions_root):
+    for obj_dir in tqdm(obj_dirs, desc="Loading Aperture objects", unit="dir"):
         apmaster = obj_dir / "Master.apmaster"
         if apmaster.exists():
             if _index_file(apmaster, "master", library) is not None:
@@ -245,4 +425,13 @@ def load_library(library_path: Path) -> ApertureLibrary:
         len(library.keywords_flat),
         library_path,
     )
+
+    # Album / project structure (after versions are loaded, since project
+    # paths are resolved per-version). Build folder maps once and reuse.
+    database_dir = library_path / "Database"
+    folders_root = database_dir / "Folders"
+    folder_name, folder_parent = _build_folder_maps(folders_root)
+    load_albums(library_path, library, folder_name, folder_parent)
+    load_project_paths(library_path, library, folder_name, folder_parent)
+
     return library

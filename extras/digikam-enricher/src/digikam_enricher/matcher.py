@@ -161,12 +161,20 @@ def resolve_field(
 
     ``field_path`` is a dotted path into the plist dict (e.g.
     ``exifProperties.FocalLength``). The special ``keywords`` path resolves the
-    object's keyword UUID list to human-readable names.
+    object's keyword UUID list to human-readable names. The special ``albums``
+    and ``project`` paths resolve album/project membership from the library's
+    album and project indices.
     """
     metadata = obj.metadata
 
     if field_path == "keywords":
         return _resolve_keywords(library, metadata)
+
+    if field_path == "albums":
+        return _resolve_albums(library, obj)
+
+    if field_path == "project":
+        return _resolve_project(library, obj)
 
     # Alias: Aperture stores rating under 'mainRating' in .apversion plists.
     if field_path == "rating":
@@ -181,6 +189,59 @@ def resolve_field(
             return None
         current = current[part]
     return current
+
+
+def _resolve_albums(
+    library: ApertureLibrary,
+    obj: ApertureObject,
+) -> list[str] | None:
+    """Resolve the version UUID for ``obj`` and look up its album paths.
+
+    For version objects, the version UUID is used directly. For master objects,
+    the master's ``originalVersionUuid`` is used (matching the master sidecar's
+    ``digiKam:ImageUniqueID``), falling back to the master UUID itself.
+    """
+    version_uuid = _resolve_version_uuid(obj)
+    if version_uuid is None:
+        return None
+    paths = library.album_paths.get(version_uuid)
+    return paths if paths else None
+
+
+def _resolve_project(
+    library: ApertureLibrary,
+    obj: ApertureObject,
+) -> str | None:
+    """Resolve the version UUID for ``obj`` and look up its project path.
+
+    For version objects, the version UUID is used directly. For master objects,
+    the master's ``originalVersionUuid`` is used (matching the master sidecar's
+    ``digiKam:ImageUniqueID``), falling back to the master UUID itself.
+    """
+    version_uuid = _resolve_version_uuid(obj)
+    if version_uuid is None:
+        return None
+    return library.project_paths.get(version_uuid)
+
+
+def _resolve_version_uuid(obj: ApertureObject) -> str | None:
+    """Determine the version UUID to use for album/project lookups.
+
+    - For version objects: use ``obj.uuid`` directly.
+    - For master objects: use ``obj.metadata.get("originalVersionUuid")``
+      (the master's original version UUID, matching the master sidecar's
+      ``digiKam:ImageUniqueID``). If absent, fall back to ``obj.uuid`` (the
+      master UUID), which will simply miss unless the master UUID also appears
+      in an album's ``versionUuids``.
+    """
+    if obj.obj_type == "version":
+        return obj.uuid
+    if obj.obj_type == "master":
+        orig = obj.metadata.get("originalVersionUuid")
+        if isinstance(orig, str):
+            return orig
+        return obj.uuid
+    return None
 
 
 def _resolve_keywords(library: ApertureLibrary, metadata: dict) -> list[str] | None:

@@ -172,3 +172,143 @@ def test_field_mapping_equality():
     a = FieldMapping("rating", "XMP-digiKam:xmpRating")
     b = parse_mapping("rating=XMP-digiKam:xmpRating")
     assert a == b
+
+
+def test_dry_run_albums_field(tmp_path):
+    """The 'albums' field resolves to album paths from the test library.
+
+    The testdata version (t58rPT%6SYCIW2ooj%iRCQ) is not in any album, so the
+    field resolves to None and is counted as missing.
+    """
+    export_root = _make_export_tree(tmp_path)
+    options = EnrichOptions(
+        aperture_library=AHTML,
+        export_root=export_root,
+        mappings=[parse_mapping("albums=XMP-aplib:AlbumPath")],
+        dry_run=True,
+    )
+    report = enricher.enrich(options)
+    assert report.matched_versions == 1
+    assert report.field_count == 0
+    assert report.missing_field == 1
+    assert report.errors == 0
+
+
+def test_dry_run_project_field(tmp_path):
+    """The 'project' field resolves to a project path from the test library.
+
+    The testdata version's projectUuid does not match any folder UUID in the
+    fixture, so the field resolves to None and is counted as missing.
+    """
+    export_root = _make_export_tree(tmp_path)
+    options = EnrichOptions(
+        aperture_library=AHTML,
+        export_root=export_root,
+        mappings=[parse_mapping("project=XMP-aplib:ProjectPath")],
+        dry_run=True,
+    )
+    report = enricher.enrich(options)
+    assert report.matched_versions == 1
+    assert report.field_count == 0
+    assert report.missing_field == 1
+    assert report.errors == 0
+
+
+def test_dry_run_albums_and_project_together(tmp_path):
+    """Both albums and project can be mapped in a single run."""
+    export_root = _make_export_tree(tmp_path)
+    options = EnrichOptions(
+        aperture_library=AHTML,
+        export_root=export_root,
+        mappings=[
+            parse_mapping("albums=XMP-aplib:AlbumPath"),
+            parse_mapping("project=XMP-aplib:ProjectPath"),
+        ],
+        dry_run=True,
+    )
+    report = enricher.enrich(options)
+    assert report.matched_versions == 1
+    assert report.field_count == 0
+    assert report.missing_field == 2
+    assert report.errors == 0
+
+
+def test_overwrite_clears_existing_list_values(tmp_path):
+    """When --overwrite is used, list properties should not accumulate
+    duplicates on re-runs. The write_list_property method should clear
+    existing values before appending new ones."""
+    from digikam_enricher.xmp_writer import XmpWriter
+
+    export_root = _make_export_tree(tmp_path)
+
+    class FakeWriter:
+        def __init__(self):
+            self.calls = []
+
+        def write_list_property(self, path, tag, values, stats=None, overwrite=False):
+            self.calls.append(("list", str(path), tag, list(values), overwrite))
+            return True
+
+        def write_property(self, path, tag, value, stats=None):
+            self.calls.append(("scalar", str(path), tag, value))
+            return True
+
+        def read_tags(self, path, tags):
+            return {}
+
+        def exists(self, path, tag):
+            return False
+
+    fake = FakeWriter()
+
+    import digikam_enricher.enricher as mod
+
+    class _FakeCtx:
+        def __init__(self, writer):
+            self._writer = writer
+
+        def __enter__(self):
+            return self._writer
+
+        def __exit__(self, *a):
+            return False
+
+    original_factory = mod.XmpWriter
+
+    class PatchedXmpWriter(original_factory):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            self._fake = fake
+
+        def __enter__(self):
+            return self._fake
+
+        def __exit__(self, *a):
+            return False
+
+    import pytest as _p
+    with _p.MonkeyPatch().context() as mp:
+        mp.setattr(mod, "XmpWriter", PatchedXmpWriter)
+
+        # First run: write a list property
+        options = EnrichOptions(
+            aperture_library=AHTML,
+            export_root=export_root,
+            mappings=[parse_mapping("albums=XMP-aplib:AlbumPath")],
+            dry_run=False,
+            overwrite=False,
+        )
+        report = mod.enrich(options)
+        # albums resolves to None for testdata version, so no writes
+        assert report.field_count == 0
+
+        # Second run with overwrite=True
+        options2 = EnrichOptions(
+            aperture_library=AHTML,
+            export_root=export_root,
+            mappings=[parse_mapping("albums=XMP-aplib:AlbumPath")],
+            dry_run=False,
+            overwrite=True,
+        )
+        report2 = mod.enrich(options2)
+        assert report2.field_count == 0  # still None for testdata

@@ -14,6 +14,8 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from tqdm import tqdm
+
 from .aperture import ApertureLibrary, load_library
 from .indexer import ExportIndex, ExportItem, index_export_tree
 from .matcher import (
@@ -136,7 +138,9 @@ def _write_value(
         return
 
     if isinstance(value, (list, tuple)) and value:
-        ok = writer.write_list_property(item.xmp_path, mapping.xmp_tag, list(value))
+        ok = writer.write_list_property(
+            item.xmp_path, mapping.xmp_tag, list(value), overwrite=overwrite
+        )
     else:
         ok = writer.write_property(item.xmp_path, mapping.xmp_tag, value)
 
@@ -204,7 +208,8 @@ def enrich(options: EnrichOptions) -> EnrichReport:
     items_by_id = index.by_unique_id
 
     def run(et: XmpWriter | None) -> None:
-        for rec in records:
+        matched_records = [r for r in records if r.kind != MatchKind.UNMATCHED]
+        for rec in tqdm(matched_records, desc="Enriching sidecars", unit="xmp"):
             if rec.kind == MatchKind.UNMATCHED:
                 continue
             obj = None

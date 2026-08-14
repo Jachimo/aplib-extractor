@@ -66,3 +66,55 @@ def test_master_fields(library):
     master = library.masters["V6jjzYNdSVu006MPsZkt5w"]
     assert master.metadata.get("fileName") == "PICT0019.JPG"
     assert master.metadata.get("imagePath") is not None
+
+
+def test_album_paths_loaded(library):
+    """The subclass-3 'Flickr' album contains version BF6nuoBnTumzoXyexdmXlw."""
+    assert "BF6nuoBnTumzoXyexdmXlw" in library.album_paths
+    paths = library.album_paths["BF6nuoBnTumzoXyexdmXlw"]
+    assert len(paths) == 1
+    # The album's folderUuid is 'TopLevelAlbums' (a root sentinel), so the
+    # path is just the album name.
+    assert paths[0] == "Flickr"
+
+
+def test_project_paths_loaded(library):
+    """The testdata fixture's projectUuid ('1AgVFohpQ02BiLvjtdUCzw') does not
+    match any folder UUID in the fixture, so project_paths is empty for this
+    minimal library. The mechanism is exercised by test_matcher.py with
+    synthetic data."""
+    # projectUuid in the fixture doesn't resolve to a folder, so no paths.
+    assert len(library.project_paths) == 0
+
+
+def test_project_paths_resolves_with_matching_folder(tmp_path):
+    """When a version's projectUuid matches a folder UUID, the path resolves."""
+    from digikam_enricher.aperture import (
+        ApertureLibrary,
+        ApertureObject,
+        load_project_paths,
+    )
+    from pathlib import Path
+
+    lib = ApertureLibrary()
+    lib.versions["V-1"] = ApertureObject(
+        uuid="V-1",
+        obj_type="version",
+        master_uuid="M-1",
+        metadata={"projectUuid": "FOLDER-1"},
+    )
+    # Create a fake folder plist
+    folders_dir = tmp_path / "Database" / "Folders"
+    folders_dir.mkdir(parents=True)
+    folder_plist = folders_dir / "FOLDER-1.apfolder"
+    import plistlib
+    plistlib.dump(
+        {
+            "uuid": "FOLDER-1",
+            "name": "MyProject",
+            "parentFolderUuid": "AllProjectsItem",
+        },
+        folder_plist.open("wb"),
+    )
+    load_project_paths(tmp_path, lib)
+    assert lib.project_paths["V-1"] == "MyProject"

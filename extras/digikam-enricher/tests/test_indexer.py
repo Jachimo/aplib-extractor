@@ -96,6 +96,22 @@ def test_index_skips_missing_sibling(tmp_path):
     assert len(index.by_unique_id) == 0
     # XMP still counted as scanned.
 
+
+def test_index_uppercase_extension(tmp_path):
+    """Sidecar named <stem>.xmp should find <stem>.JPG (uppercase ext)."""
+    d = tmp_path / "upper"
+    d.mkdir(parents=True, exist_ok=True)
+    image = d / "PICT2167.JPG"
+    image.write_bytes(b"fake-jpeg")
+    xmp = d / "PICT2167.xmp"
+    xmp.write_text(
+        XMP_TEMPLATE.format(master_uuid="M-1", image_unique_id="V-1"),
+        encoding="utf-8",
+    )
+    index = indexer.index_export_tree(tmp_path)
+    assert "V-1" in index.by_unique_id
+    assert index.by_unique_id["V-1"].image_path == image
+
 def test_extract_functions():
     text = '<aplib:MasterUUID>M-9</aplib:MasterUUID><digiKam:ImageUniqueID>V-9</digiKam:ImageUniqueID>'
     assert indexer.extract_master_uuid(text) == "M-9"

@@ -11,6 +11,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from tqdm import tqdm
+
 logger = logging.getLogger(__name__)
 
 os_scandir = os.scandir
@@ -119,7 +121,10 @@ def index_export_tree(export_root: Path, limit: int | None = None) -> ExportInde
         return index
 
     count = 0
-    for xmp_path in _iter_xmp(export_root):
+    xmp_iter = _iter_xmp(export_root)
+    if limit is not None:
+        xmp_iter = (x for i, x in enumerate(xmp_iter) if i < limit)
+    for xmp_path in tqdm(xmp_iter, desc="Indexing export tree", unit="xmp"):
         if limit is not None and count >= limit:
             break
         count += 1
@@ -224,6 +229,10 @@ def _find_sibling_image(xmp_path: Path) -> Path | None:
         candidate = parent / f"{stem}{suffix}"
         if _is_image(candidate):
             return candidate
+        # Try uppercase extension (e.g. .JPG vs .jpg).
+        candidate_upper = parent / f"{stem}{suffix.upper()}"
+        if _is_image(candidate_upper):
+            return candidate_upper
 
     return None
 

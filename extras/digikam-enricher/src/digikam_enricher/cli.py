@@ -28,6 +28,8 @@ AVAILABLE_FIELDS: list[tuple[str, str, str]] = [
     ("isOriginal", "bool", "True if this is the original version"),
     ("imageDate", "datetime", "Image capture date"),
     ("createDate", "datetime", "Object creation date"),
+    ("albums", "[path]", "Aperture album/folder paths (multi-valued)"),
+    ("project", "path", "Aperture project path (single)"),
     ("customInfo.cameraTimeZoneName", "str", "Camera timezone"),
     ("customInfo.pictureTimeZoneName", "str", "Picture timezone"),
     ("iptcProperties.<field>", "varies", "See IPTC fields below"),
